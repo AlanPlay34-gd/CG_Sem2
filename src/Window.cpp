@@ -1,6 +1,6 @@
-﻿#include "Window.h"
+﻿#include "../h/Window.h"
 #include <windowsx.h>
-#include "DirectXApp.h"
+#include "../h/DirectXApp.h"
 
 Window::Window(HINSTANCE hInstance, int nCmdShow)
     : hInstance(hInstance), hWnd(nullptr), width(800), height(600) {

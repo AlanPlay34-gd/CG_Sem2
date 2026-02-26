@@ -1,5 +1,5 @@
-﻿#include "d3dUtil.h"
-#include "ThrowIfFailed.h"
+﻿#include "../h/d3dUtil.h"
+#include "../h/ThrowIfFailed.h"
 
 namespace d3dUtil
 {

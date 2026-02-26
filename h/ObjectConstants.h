@@ -4,11 +4,11 @@
 struct ObjectConstants
 {
     DirectX::XMFLOAT4X4 mWorldViewProj;
-    DirectX::XMFLOAT4 mUVTransform;  // <- ПРАВИЛЬНО: как член структуры
+    DirectX::XMFLOAT4 mUVTransform;
 
     ObjectConstants()
     {
         DirectX::XMStoreFloat4x4(&mWorldViewProj, DirectX::XMMatrixIdentity());
-        mUVTransform = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);  // инициализация в конструкторе
+        mUVTransform = DirectX::XMFLOAT4(1.0f, 1.0f, 0.0f, 0.0f);
     }
 };

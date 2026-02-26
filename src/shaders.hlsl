@@ -25,7 +25,6 @@ PSInput VS(VSInput vin)
     PSInput vout;
     vout.PosH = mul(float4(vin.Pos, 1.0f), mWorldViewProj);
 
-    // Применяем тайлинг и анимацию к UV координатам
     vout.TexC = vin.Tex * mUVTransform.xy + mUVTransform.zw;
 
     return vout;
@@ -35,8 +34,6 @@ float4 PS(PSInput pin) : SV_Target
 {
     float4 tex = gDiffuseMap.Sample(gSampler, pin.TexC);
 
-    // Отбрасываем полностью прозрачные пиксели
-    clip(tex.a - 0.05f);
 
     return tex;
 }

@@ -1,13 +1,13 @@
-﻿#include "DirectXApp.h"
+﻿#include "../h/DirectXApp.h"
 #include <DirectXMath.h>
 #include <d3d12.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
 #include <string>
-#include "ThrowIfFailed.h"
-#include "Parser.h"
-#include "TgaLoader.h"
-#include "d3dUtil.h"
+#include "../h/ThrowIfFailed.h"
+#include "../h/Parser.h"
+#include "../h/TgaLoader.h"
+#include "../h/d3dUtil.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -15,7 +15,6 @@
 
 using namespace DirectX;
 
-// Вспомогательная структура для барьеров
 struct CD3DX12_RESOURCE_BARRIER_HELPER {
     static D3D12_RESOURCE_BARRIER Transition(
         _In_ ID3D12Resource* pResource,
@@ -34,7 +33,6 @@ struct CD3DX12_RESOURCE_BARRIER_HELPER {
     }
 };
 
-// Вспомогательные структуры CD3DX12 (как на слайдах)
 struct CD3DX12_DEFAULT {};
 extern const DECLSPEC_SELECTANY CD3DX12_DEFAULT D3D12_DEFAULT;
 
@@ -100,7 +98,6 @@ struct CD3DX12_DEPTH_STENCIL_DESC : public D3D12_DEPTH_STENCIL_DESC
 
 DirectXApp::DirectXApp(Window& window) : window(window)
 {
-    // Инициализируем матрицы
     XMStoreFloat4x4(&mWorld, XMMatrixIdentity());
     XMStoreFloat4x4(&mView, XMMatrixIdentity());
     XMStoreFloat4x4(&mProj, XMMatrixIdentity());
@@ -110,13 +107,13 @@ DirectXApp::~DirectXApp() {
     Shutdown();
 }
 
-// =========== Методы мыши ==========
+// =========== Mouse Metod ==========
 void DirectXApp::OnMouseDown(WPARAM btnState, int x, int y)
 {
     mLastMousePos.x = x;
     mLastMousePos.y = y;
 
-    SetCapture(window.GetHwnd()); // захват мыши
+    SetCapture(window.GetHwnd());
 }
 
 void DirectXApp::OnMouseUp(WPARAM btnState, int x, int y)
@@ -136,7 +133,6 @@ void DirectXApp::OnMouseMove(WPARAM btnState, int x, int y)
         mYaw += dx;
         mPitch += dy;
 
-        // ограничение чтобы не переворачивалась
         if (mPitch > XM_PIDIV2 - 0.1f)
             mPitch = XM_PIDIV2 - 0.1f;
 
@@ -164,18 +160,18 @@ void DirectXApp::BuildInputLayout()
     };
 }
 
-// =========== Шейдеры ===========
+// =========== Shader ===========
 void DirectXApp::BuildShaders()
 {
     mvsByteCode = d3dUtil::CompileShader(
-        L"../shaders.hlsl",
+        L"../src/shaders.hlsl",
         nullptr,
         "VS",
         "vs_5_0"
     );
 
     mpsByteCode = d3dUtil::CompileShader(
-        L"../shaders.hlsl",
+        L"../src/shaders.hlsl",
         nullptr,
         "PS",
         "ps_5_0"
@@ -184,29 +180,29 @@ void DirectXApp::BuildShaders()
     MessageBox(NULL, L"SUCCESS! Shaders compiled", L"Info", MB_OK);
 }
 
-// =========== Константный буфер и CBV ===========
+// =========== CBV ===========
 void DirectXApp::BuildConstantBuffer()
 {
-    // 1. Создаем UploadBuffer для констант
+    // Upload Buffer
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(
         device.Get(),
         1,
         true
     );
 
-    // 2. Инициализируем матрицу и UV transform
+    // Initialization of matrix
     ObjectConstants objConstants;
     XMMATRIX view = XMMatrixIdentity();
     XMMATRIX proj = XMMatrixOrthographicLH(10.0f, 10.0f, 0.1f, 100.0f);
     XMMATRIX viewProj = view * proj;
     XMStoreFloat4x4(&objConstants.mWorldViewProj, XMMatrixTranspose(viewProj));
 
-    // Инициализируем UV transform
+    // Initialization UV transform
     objConstants.mUVTransform = XMFLOAT4(2.0f, 2.0f, 0.0f, 0.0f); // scale 2x для тайлинга
 
     mObjectCB->CopyData(0, objConstants);
 
-    // 3. Создаем CBV (Constant Buffer View) в куче дескрипторов
+    // Make CBV (Constant Buffer View) in a heap of descriptors
     UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
     D3D12_GPU_VIRTUAL_ADDRESS cbAddress = mObjectCB->Resource()->GetGPUVirtualAddress();
 
@@ -214,7 +210,7 @@ void DirectXApp::BuildConstantBuffer()
     cbvDesc.BufferLocation = cbAddress;
     cbvDesc.SizeInBytes = objCBByteSize;
 
-    // Получаем дескриптор из CBV кучи
+    // Getting descriptors from CBV heap
     D3D12_CPU_DESCRIPTOR_HANDLE cbvHandle = mCbvHeap->GetCPUDescriptorHandleForHeapStart();
     device->CreateConstantBufferView(&cbvDesc, cbvHandle);
 
@@ -291,15 +287,16 @@ void DirectXApp::BuildRootSignature()
 // =========== PSO (Pipeline State Object) ===========
 void DirectXApp::BuildPSO()
 {
-    // Создаем описание PSO (как на слайде 20.26.54)
+    // Making description PSO
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
     ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
 
-    // 1. Шейдеры (как на слайде)
+    // VS shader
     psoDesc.VS = {
         reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()),
         mvsByteCode->GetBufferSize()
     };
+    // PS shader
     psoDesc.PS = {
         reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()),
         mpsByteCode->GetBufferSize()
@@ -308,7 +305,7 @@ void DirectXApp::BuildPSO()
     // 2. Input Layout
     psoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
 
-    // 3. Корневая сигнатура
+    // 3. Root signature
     psoDesc.pRootSignature = mRootSignature.Get();
 
     // 4. Растеризатор (используем CD3DX12_RASTERIZER_DESC как на слайде)
@@ -865,9 +862,9 @@ bool DirectXApp::Initialize() {
     BuildInputLayout();
    //BuildVertexBuffer();
    //BuildIndexBuffer();
-    BuildObj("../sponza.obj");
+    BuildObj("../assets/sponza.obj");
     std::vector<ParsedMaterial> parsed;
-    LoadMTL("../sponza.mtl", parsed);
+    LoadMTL("../assets/sponza.mtl", parsed);
 
     UINT srvIndex = 0;
 
@@ -880,7 +877,7 @@ bool DirectXApp::Initialize() {
         if (!p.DiffuseMap.empty())
         {
             CreateTextureFromTGA(
-                "../" + p.DiffuseMap,
+                "../assets/" + p.DiffuseMap,
                 mat.DiffuseTexture);
         }
         else
@@ -1143,7 +1140,7 @@ void DirectXApp::Draw(const Timer& gt)
 
     SetViewportAndScissor();
 
-    const float clearColor[] = { 1.0f, 0.0f, 1.0f, 1.0f };
+    const float clearColor[] = { 0.53f, 0.81f, 0.98f, 1.0f };
 
     auto rtvHandle = CurrentBackBufferView();
     auto dsvHandle = mDsvHeap->GetCPUDescriptorHandleForHeapStart();

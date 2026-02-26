@@ -1,7 +1,7 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include "DirectXApp.h"
-#include "Window.h"
+#include "../h/DirectXApp.h"
+#include "../h/Window.h"
 
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 

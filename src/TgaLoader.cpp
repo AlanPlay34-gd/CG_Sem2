@@ -1,4 +1,4 @@
-#include "TgaLoader.h"
+#include "../h/TgaLoader.h"
 #include <fstream>
 
 bool LoadTGA(const std::string& filename, TgaImage& outImage)

@@ -1,4 +1,4 @@
-﻿#include "InputDevice.h"
+﻿#include "../h/InputDevice.h"
 
 InputDevice::InputDevice() : mouseX(0), mouseY(0) {
     // Инициализация кнопок мыши

@@ -9,13 +9,13 @@
 #include <vector>
 #include <windows.h>
 #include <wrl/client.h>
-#include "ObjectConstants.h"
-#include "Submesh.h"
-#include "Timer.h"
-#include "UploadBuffer.h"
-#include "vertex.h"
+#include "../h/ObjectConstants.h"
+#include "../h/Timer.h"
+#include "../h/UploadBuffer.h"
+#include "../h/vertex.h"
 #include "Material.h"
 #include "MathHelper.h"
+#include "Submesh.h"
 #include "ThrowIfFailed.h"
 #include "Window.h"
 
@@ -75,9 +75,8 @@ private:
 
     DirectXApp* dxApp = nullptr;
 
-    XMFLOAT3 mEyePos = { 0.0f, 5.0f, -15.0f };
+    XMFLOAT3 mEyePos = XMFLOAT3(0.0f, 0.0f, 0.0f);
 
-    //
 
     Window& window;
 
