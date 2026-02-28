@@ -228,15 +228,24 @@ void DirectXApp::BuildRootSignature()
     cbvRange.RegisterSpace = 0;
     cbvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    // ===== SRV range (t0)
-    D3D12_DESCRIPTOR_RANGE srvRange = {};
-    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 1;
-    srvRange.BaseShaderRegister = 0;
-    srvRange.RegisterSpace = 0;
-    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    // ===== SRV range for texture1 (t0)
+    D3D12_DESCRIPTOR_RANGE srvRange1 = {};
+    srvRange1.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange1.NumDescriptors = 1;
+    srvRange1.BaseShaderRegister = 0;
+    srvRange1.RegisterSpace = 0;
+    srvRange1.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[2];
+    // ===== SRV range for texture2 (t1) - НОВЫЙ!
+    D3D12_DESCRIPTOR_RANGE srvRange2 = {};
+    srvRange2.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange2.NumDescriptors = 1;
+    srvRange2.BaseShaderRegister = 1;  // t1
+    srvRange2.RegisterSpace = 0;
+    srvRange2.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    // Теперь у нас 3 параметра: CBV, SRV0, SRV1
+    D3D12_ROOT_PARAMETER rootParameters[3];
 
     // Slot 0 → CBV
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -244,11 +253,17 @@ void DirectXApp::BuildRootSignature()
     rootParameters[0].DescriptorTable.pDescriptorRanges = &cbvRange;
     rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    // Slot 1 → SRV
+    // Slot 1 → SRV for texture1 (t0)
     rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParameters[1].DescriptorTable.pDescriptorRanges = &srvRange;
+    rootParameters[1].DescriptorTable.pDescriptorRanges = &srvRange1;
     rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Slot 2 → SRV for texture2 (t1) - НОВЫЙ!
+    rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[2].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[2].DescriptorTable.pDescriptorRanges = &srvRange2;
+    rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     // ===== Static Sampler (s0)
     D3D12_STATIC_SAMPLER_DESC sampler = {};
@@ -261,27 +276,38 @@ void DirectXApp::BuildRootSignature()
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-    rootSigDesc.NumParameters = 2;
+    rootSigDesc.NumParameters = 3;  // БЫЛО 2, СТАЛО 3
     rootSigDesc.pParameters = rootParameters;
     rootSigDesc.NumStaticSamplers = 1;
     rootSigDesc.pStaticSamplers = &sampler;
-    rootSigDesc.Flags =
-        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> serializedRootSig = nullptr;
     ComPtr<ID3DBlob> errorBlob = nullptr;
 
-    ThrowIfFailed(D3D12SerializeRootSignature(
+    HRESULT hr = D3D12SerializeRootSignature(
         &rootSigDesc,
         D3D_ROOT_SIGNATURE_VERSION_1,
         serializedRootSig.GetAddressOf(),
-        errorBlob.GetAddressOf()));
+        errorBlob.GetAddressOf());
 
-    ThrowIfFailed(device->CreateRootSignature(
+    if (FAILED(hr)) {
+        MessageBoxA(NULL, "Failed to serialize root signature", "Error", MB_OK);
+        return;
+    }
+
+    hr = device->CreateRootSignature(
         0,
         serializedRootSig->GetBufferPointer(),
         serializedRootSig->GetBufferSize(),
-        IID_PPV_ARGS(&mRootSignature)));
+        IID_PPV_ARGS(&mRootSignature));
+
+    if (FAILED(hr)) {
+        MessageBoxA(NULL, "Failed to create root signature", "Error", MB_OK);
+        return;
+    }
+
+    MessageBox(NULL, L"Root signature created with 3 parameters", L"Info", MB_OK);
 }
 
 // =========== PSO (Pipeline State Object) ===========
@@ -366,66 +392,6 @@ void DirectXApp::BuildPSO()
     MessageBox(NULL, L"PSO created successfully (Solid Mode)", L"Info", MB_OK);
 }
 
-// =========== Wireframe PSO ===========
-void DirectXApp::BuildWireframePSO()
-{
-    // Создаем описание PSO для проволочного каркаса
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC wireframePsoDesc;
-    ZeroMemory(&wireframePsoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
-
-    // 1. Шейдеры (те же самые)
-    wireframePsoDesc.VS = {
-        reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()),
-        mvsByteCode->GetBufferSize()
-    };
-    wireframePsoDesc.PS = {
-        reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()),
-        mpsByteCode->GetBufferSize()
-    };
-
-    // 2. Input Layout
-    wireframePsoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
-
-    // 3. Корневая сигнатура
-    wireframePsoDesc.pRootSignature = mRootSignature.Get();
-
-    // 4. Растеризатор - НАСТРОЙКА ДЛЯ ПРОВОЛОЧНОГО КАРКАСА
-    wireframePsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    wireframePsoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;  // ПРОВОЛОЧНЫЙ КАРКАС
-    wireframePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;       // БЕЗ ОБРЕЗКИ
-
-    // 5. Blend State
-    wireframePsoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-
-    // 6. Depth/Stencil State
-    wireframePsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-
-    // 7. Sample Mask
-    wireframePsoDesc.SampleMask = UINT_MAX;
-
-    // 8. Примитивы
-    wireframePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-
-    // 9. Render Targets
-    wireframePsoDesc.NumRenderTargets = 1;
-    wireframePsoDesc.RTVFormats[0] = mBackBufferFormat;
-
-    // 10. Формат Depth/Stencil
-    wireframePsoDesc.DSVFormat = mDepthStencilFormat;
-
-    // 11. Multisampling
-    wireframePsoDesc.SampleDesc.Count = 1;
-    wireframePsoDesc.SampleDesc.Quality = 0;
-
-    // 12. Создание PSO
-    HRESULT hr = device->CreateGraphicsPipelineState(&wireframePsoDesc, IID_PPV_ARGS(&mWireframePSO));
-    if (FAILED(hr)) {
-        MessageBox(NULL, L"Failed to create Wireframe PSO", L"Error", MB_OK);
-        return;
-    }
-
-    MessageBox(NULL, L"Wireframe PSO created successfully", L"Info", MB_OK);
-}
 // =========== Остальные методы ===========
 void DirectXApp::BuildObj(const std::string& path)
 {
@@ -517,7 +483,6 @@ void DirectXApp::Shutdown() {
 
     // Освобождаем PSO
     mPSO.Reset();
-    mWireframePSO.Reset();
     mRootSignature.Reset();
 
     for (int i = 0; i < SwapChainBufferCount; i++) {
@@ -860,8 +825,6 @@ bool DirectXApp::Initialize() {
 
    //Геометрия и ресурсы
     BuildInputLayout();
-   //BuildVertexBuffer();
-   //BuildIndexBuffer();
     BuildObj("../assets/sponza.obj");
     std::vector<ParsedMaterial> parsed;
     LoadMTL("../assets/sponza.mtl", parsed);
@@ -903,10 +866,27 @@ bool DirectXApp::Initialize() {
 
         mMaterials.push_back(mat);
     }
+    CreateTextureFromTGA("../assets/textures/sponza_roof_diff.tga", mSecondaryTexture);
+
+    // SRV for 2 texture
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc2 = {};
+    srvDesc2.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc2.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    srvDesc2.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc2.Texture2D.MipLevels = 1;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE hDescriptor2 =
+        mCbvHeap->GetCPUDescriptorHandleForHeapStart();
+    hDescriptor2.ptr += (1 + mMaterials.size()) * mCbvSrvUavDescriptorSize;
+
+    device->CreateShaderResourceView(
+        mSecondaryTexture.Get(),
+        &srvDesc2,
+        hDescriptor2);
+
     BuildRootSignature();
     BuildShaders();
     BuildPSO();
-    BuildWireframePSO();  
     BuildConstantBuffer();
 
     // Инициализация проекционной матрицы
@@ -945,17 +925,6 @@ void DirectXApp::OnKeyDown(WPARAM wParam)
         OutputDebugStringA("Window not active!\n");
         return;
     }
-    // Пробел переключает режим отображения
-    if (wParam == VK_F2) {
-        mWireframeMode = !mWireframeMode;
-
-        if (mWireframeMode) {
-            SetWindowText(window.GetHandle(), L"DirectX 12 Framework - Wireframe Mode (Press SPACE to switch)");
-        }
-        else {
-            SetWindowText(window.GetHandle(), L"DirectX 12 Framework - Solid Mode (Press SPACE to switch)");
-        }
-    }
 
     // Клавиша T включает/выключает анимацию текстур
     if (wParam == 'T') {
@@ -968,6 +937,12 @@ void DirectXApp::OnKeyDown(WPARAM wParam)
         mUVScaleV = 1.0f;
         mUVOffsetU = 0.0f;
         mUVOffsetV = 0.0f;
+    }
+    if (wParam == 'M') {
+        mChessboardMode = !mChessboardMode;
+        char buf[100];
+        sprintf_s(buf, "Chessboard mode: %s\n", mChessboardMode ? "ON" : "OFF");
+        OutputDebugStringA(buf);
     }
 }
 
@@ -1002,12 +977,7 @@ void DirectXApp::CalculateFrameStats() {
         float mspf = 1000.0f / fps;
 
         std::wstring windowText = mMainWndCaption;
-        if (mWireframeMode) {
-            windowText += L" - Wireframe Mode";
-        }
-        else {
-            windowText += L" - Solid Mode";
-        }
+
         windowText += L" FPS: " + std::to_wstring(fps);
         windowText += L" MSPF: " + std::to_wstring(mspf);
         windowText += L" (Press SPACE to switch modes)";
@@ -1091,13 +1061,38 @@ void DirectXApp::Update(const Timer& gt)
         if (mUVOffsetV > 1.0f) mUVOffsetV -= 1.0f;
     }
 
-    // Управление тайлингом с клавиатуры
+    // Tailing
     if (GetAsyncKeyState('1') & 0x8000) mUVScaleU += dt * 2.0f;
     if (GetAsyncKeyState('2') & 0x8000) mUVScaleU -= dt * 2.0f;
     if (GetAsyncKeyState('3') & 0x8000) mUVScaleV += dt * 2.0f;
     if (GetAsyncKeyState('4') & 0x8000) mUVScaleV -= dt * 2.0f;
 
-    // Ограничения
+    // Limits
+    mUVScaleU = max(0.1f, mUVScaleU);
+    mUVScaleV = max(0.1f, mUVScaleV);
+
+    // Управление тайлингом
+    if (GetAsyncKeyState('1') & 0x8000) mUVScaleU += dt * 2.0f;
+    if (GetAsyncKeyState('2') & 0x8000) mUVScaleU -= dt * 2.0f;
+    if (GetAsyncKeyState('3') & 0x8000) mUVScaleV += dt * 2.0f;
+    if (GetAsyncKeyState('4') & 0x8000) mUVScaleV -= dt * 2.0f;
+
+    // Управление шахматной доской
+    if (GetAsyncKeyState('M') & 0x8000) {  // M - переключение режима
+        static bool wasPressed = false;
+        if (!wasPressed) {
+            mChessboardMode = !mChessboardMode;
+            wasPressed = true;
+        }
+        else {
+            wasPressed = false;
+        }
+    }
+
+    if (GetAsyncKeyState('[') & 0x8000) mChessTileSize += dt * 0.2f;
+    if (GetAsyncKeyState(']') & 0x8000) mChessTileSize -= dt * 0.2f;
+
+    mChessTileSize = max(0.1f, min(2.0f, mChessTileSize));
     mUVScaleU = max(0.1f, mUVScaleU);
     mUVScaleV = max(0.1f, mUVScaleV);
 
@@ -1125,10 +1120,7 @@ void DirectXApp::Draw(const Timer& gt)
 
     mDirectCmdListAlloc->Reset();
 
-    if (mWireframeMode)
-        mCommandList->Reset(mDirectCmdListAlloc.Get(), mWireframePSO.Get());
-    else
-        mCommandList->Reset(mDirectCmdListAlloc.Get(), mPSO.Get());
+    mCommandList->Reset(mDirectCmdListAlloc.Get(), mPSO.Get());
 
     D3D12_RESOURCE_BARRIER barrier =
         CD3DX12_RESOURCE_BARRIER_HELPER::Transition(
@@ -1172,9 +1164,7 @@ void DirectXApp::Draw(const Timer& gt)
 
     for (auto& sm : mSubmeshes)
     {
-        // 🔎 Найти материал
         Material* mat = nullptr;
-
         for (auto& m : mMaterials)
         {
             if (m.Name == sm.MaterialName)
@@ -1184,26 +1174,31 @@ void DirectXApp::Draw(const Timer& gt)
             }
         }
 
-        if (!mat)
-        {
-            MessageBoxA(nullptr, sm.MaterialName.c_str(), "Missing Material", MB_OK);
-            continue;
+        if (!mat) continue;
+
+        // SRV for 1 texture(t0)
+        D3D12_GPU_DESCRIPTOR_HANDLE srvHandle1 =
+            mCbvHeap->GetGPUDescriptorHandleForHeapStart();
+        srvHandle1.ptr += (1 + mat->SrvHeapIndex) * mCbvSrvUavDescriptorSize;
+        mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle1);
+
+        // SRV for 2 texture (t1)
+        D3D12_GPU_DESCRIPTOR_HANDLE srvHandle2 =
+            mCbvHeap->GetGPUDescriptorHandleForHeapStart();
+        srvHandle2.ptr += (1 + mMaterials.size()) * mCbvSrvUavDescriptorSize;
+
+        bool isFloor = false;
+
+        if (mat->Name.find("floor") != std::string::npos) {
+            isFloor = true;
+            }
+
+        if (isFloor) {
+            mCommandList->SetGraphicsRootDescriptorTable(2, srvHandle2);
+        } else {
+            mCommandList->SetGraphicsRootDescriptorTable(2, srvHandle1);
         }
 
-        //if (mat->DiffuseMap.empty())
-        //{
-        //    MessageBoxA(nullptr, mat->Name.c_str(), "NO TEXTURE", MB_OK);
-        //}
-
-        // 📌 Установить SRV конкретного материала
-        D3D12_GPU_DESCRIPTOR_HANDLE srvHandle =
-            mCbvHeap->GetGPUDescriptorHandleForHeapStart();
-
-        srvHandle.ptr += (1 + mat->SrvHeapIndex) * mCbvSrvUavDescriptorSize;
-
-        mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle);
-
-        // 🎨 Нарисовать только этот submesh
         mCommandList->DrawIndexedInstanced(
             sm.IndexCount,
             1,

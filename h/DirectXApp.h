@@ -30,7 +30,7 @@ public:
     bool Initialize();
     void Shutdown();
 
-    // Основные методы фреймворка
+    // Framework methods
     int Run();
     virtual bool InitializeApp();
     virtual void Update(const Timer& gt);
@@ -38,29 +38,35 @@ public:
     void BuildObj(const std::string& path);
     virtual void CalculateFrameStats();
 
-    // Управление таймером
+    // For Timer
     void StopTimer() { mTimer.Stop(); }
     void StartTimer() { mTimer.Start(); }
     bool IsPaused() const { return mAppPaused; }
     Timer& GetTimer() { return mTimer; }
 
-    // Методы для мыши
+    // Mouse methods
     virtual void OnMouseDown(WPARAM btnState, int x, int y);
     virtual void OnMouseUp(WPARAM btnState, int x, int y);
     virtual void OnMouseMove(WPARAM btnState, int x, int y);
 
-    // Обработка изменения размера
+    // Resize
     virtual void OnResize();
 
-    // Обработка клавиатуры
+    // Keyboard
     virtual void OnKeyDown(WPARAM wParam);
 
     void SetDirectXApp(DirectXApp* app) { dxApp = app; }
     DirectXApp* GetDirectXApp() const { return dxApp; }
 
 private:
+    Microsoft::WRL::ComPtr<ID3D12Resource> mSecondaryTexture;
+    float mChessTileSize = 0.5f;
+    bool mChessboardMode = true;
+
     float mYaw = 0.0f;
     float mPitch = 0.0f;
+
+    //For Tiling and Animation
     float mUVOffsetU = 0.0f;
     float mUVOffsetV = 0.0f;
     float mUVScaleU = 1.0f;
@@ -98,21 +104,20 @@ private:
     ComPtr<ID3D12Resource> mSwapChainBuffer[SwapChainBufferCount];
     int mCurrBackBuffer = 0;
 
-    // Дескрипторы
+    // Descriptors
     ComPtr<ID3D12DescriptorHeap> mRtvHeap;
     ComPtr<ID3D12DescriptorHeap> mDsvHeap;
-    ComPtr<ID3D12DescriptorHeap> mCbvHeap;  // Для CBV дескрипторов
+    ComPtr<ID3D12DescriptorHeap> mCbvHeap;
     ComPtr<ID3D12Resource> mDepthStencilBuffer;
 
     UINT mRtvDescriptorSize = 0;
     UINT mDsvDescriptorSize = 0;
     UINT mCbvSrvUavDescriptorSize = 0;
 
-    // Форматы
     DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     DXGI_FORMAT mDepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 
-    // Размеры
+    // ScreenSize
     int mClientWidth = 800;
     int mClientHeight = 600;
 
@@ -120,7 +125,7 @@ private:
     D3D12_VIEWPORT mScreenViewport;
     D3D12_RECT mScissorRect;
 
-    // Таймер и состояние
+    // Timer and State
     Timer mTimer;
     bool mAppPaused = false;
     bool mResizing = false;
@@ -147,8 +152,6 @@ private:
     // =========== Root Signature и PSO ===========
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mPSO;
-    Microsoft::WRL::ComPtr<ID3D12PipelineState> mWireframePSO;  // Второй PSO для проволочного каркаса
-    bool mWireframeMode = false;  // Флаг режима отображения
 
     // Математика для камеры
     float mTheta = 1.5f * XM_PI;
