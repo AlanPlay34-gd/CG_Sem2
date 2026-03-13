@@ -28,4 +28,7 @@ add_executable(CG_Sem2
         h/Vertex.h
         src/Window.cpp
         h/Window.h
+        src/GBuffer.cpp
+        h/GBuffer.h
+        h/Light.h
 )
