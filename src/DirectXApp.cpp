@@ -177,7 +177,7 @@ void DirectXApp::BuildShaders()
         "ps_5_0"
     );
 
-    MessageBox(NULL, L"SUCCESS! Shaders compiled", L"Info", MB_OK);
+    //MessageBox(NULL, L"SUCCESS! Shaders compiled", L"Info", MB_OK);
 }
 
 // =========== CBV ===========
@@ -214,7 +214,7 @@ void DirectXApp::BuildConstantBuffer()
     D3D12_CPU_DESCRIPTOR_HANDLE cbvHandle = mCbvHeap->GetCPUDescriptorHandleForHeapStart();
     device->CreateConstantBufferView(&cbvDesc, cbvHandle);
 
-    MessageBox(NULL, L"Constant buffer and CBV created", L"Info", MB_OK);
+    //MessageBox(NULL, L"Constant buffer and CBV created", L"Info", MB_OK);
 }
 
 // =========== Root Signature ===========
@@ -307,7 +307,7 @@ void DirectXApp::BuildRootSignature()
         return;
     }
 
-    MessageBox(NULL, L"Root signature created with 3 parameters", L"Info", MB_OK);
+    //MessageBox(NULL, L"Root signature created with 3 parameters", L"Info", MB_OK);
 }
 
 // =========== PSO (Pipeline State Object) ===========
@@ -389,13 +389,13 @@ void DirectXApp::BuildPSO()
         return;
     }
 
-    MessageBox(NULL, L"PSO created successfully (Solid Mode)", L"Info", MB_OK);
+    //MessageBox(NULL, L"PSO created successfully (Solid Mode)", L"Info", MB_OK);
 }
 
 // =========== Остальные методы ===========
 void DirectXApp::BuildObj(const std::string& path)
 {
-    MessageBoxA(nullptr, "BuildObj called", "DEBUG", MB_OK);
+    //MessageBoxA(nullptr, "BuildObj called", "DEBUG", MB_OK);
 
     // Очистить старые данные
     mSubmeshes.clear();
@@ -555,7 +555,7 @@ bool DirectXApp::CreateD3DDevice() {
             MessageBox(NULL, L"No hardware adapter found and WARP failed", L"Error", MB_OK);
             return false;
         }
-        MessageBox(NULL, L"Using WARP software adapter", L"Info", MB_OK);
+        //MessageBox(NULL, L"Using WARP software adapter", L"Info", MB_OK);
     }
 
     HRESULT hr = D3D12CreateDevice(
@@ -806,7 +806,7 @@ bool DirectXApp::Initialize() {
             }
         }
     #endif
-    MessageBox(NULL, L"Starting DirectX 12 initialization...", L"Info", MB_OK);
+    //MessageBox(NULL, L"Starting DirectX 12 initialization...", L"Info", MB_OK);
 
     // Основные этапы инициализации
     if (!CreateDXGIFactory()) return false;
@@ -980,7 +980,6 @@ void DirectXApp::CalculateFrameStats() {
 
         windowText += L" FPS: " + std::to_wstring(fps);
         windowText += L" MSPF: " + std::to_wstring(mspf);
-        windowText += L" (Press SPACE to switch modes)";
 
         SetWindowText(window.GetHandle(), windowText.c_str());
 
