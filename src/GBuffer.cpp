@@ -42,57 +42,57 @@ bool GBuffer::CreateTextures(ID3D12Device* device)
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-    // Очистка значений для каждой текстуры
-    D3D12_CLEAR_VALUE clearValues[GBUFFER_COUNT] = {};
-
-    // Albedo texture (очищаем черным)
+    // Albedo texture
     texDesc.Format = mAlbedoFormat;
-    clearValues[GBUFFER_ALBEDO].Format = mAlbedoFormat;
-    clearValues[GBUFFER_ALBEDO].Color[0] = 0.0f;
-    clearValues[GBUFFER_ALBEDO].Color[1] = 0.0f;
-    clearValues[GBUFFER_ALBEDO].Color[2] = 0.0f;
-    clearValues[GBUFFER_ALBEDO].Color[3] = 1.0f;
+    D3D12_CLEAR_VALUE clearValueAlbedo = {};
+    clearValueAlbedo.Format = mAlbedoFormat;
+    clearValueAlbedo.Color[0] = 0.0f;
+    clearValueAlbedo.Color[1] = 0.0f;
+    clearValueAlbedo.Color[2] = 0.0f;
+    clearValueAlbedo.Color[3] = 1.0f;
 
     ThrowIfFailed(device->CreateCommittedResource(
         &heapProps,
         D3D12_HEAP_FLAG_NONE,
         &texDesc,
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        &clearValues[GBUFFER_ALBEDO],
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,  // <- ИСПРАВЛЕНО
+        &clearValueAlbedo,
         IID_PPV_ARGS(&mTextures[GBUFFER_ALBEDO])
-    ));
+));
 
-    // Normal texture (очищаем (0,0,0,0))
+    // Normal texture
     texDesc.Format = mNormalFormat;
-    clearValues[GBUFFER_NORMAL].Format = mNormalFormat;
-    clearValues[GBUFFER_NORMAL].Color[0] = 0.0f;
-    clearValues[GBUFFER_NORMAL].Color[1] = 0.0f;
-    clearValues[GBUFFER_NORMAL].Color[2] = 0.0f;
-    clearValues[GBUFFER_NORMAL].Color[3] = 0.0f;
+    D3D12_CLEAR_VALUE clearValueNormal = {};
+    clearValueNormal.Format = mNormalFormat;
+    clearValueNormal.Color[0] = 0.0f;
+    clearValueNormal.Color[1] = 0.0f;
+    clearValueNormal.Color[2] = 0.0f;
+    clearValueNormal.Color[3] = 0.0f;
 
     ThrowIfFailed(device->CreateCommittedResource(
         &heapProps,
         D3D12_HEAP_FLAG_NONE,
         &texDesc,
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        &clearValues[GBUFFER_NORMAL],
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, // Изменено с RENDER_TARGET
+        &clearValueNormal,
         IID_PPV_ARGS(&mTextures[GBUFFER_NORMAL])
     ));
 
-    // Position texture (очищаем (0,0,0,0))
+    // Position texture
     texDesc.Format = mPositionFormat;
-    clearValues[GBUFFER_POSITION].Format = mPositionFormat;
-    clearValues[GBUFFER_POSITION].Color[0] = 0.0f;
-    clearValues[GBUFFER_POSITION].Color[1] = 0.0f;
-    clearValues[GBUFFER_POSITION].Color[2] = 0.0f;
-    clearValues[GBUFFER_POSITION].Color[3] = 0.0f;
+    D3D12_CLEAR_VALUE clearValuePosition = {};
+    clearValuePosition.Format = mPositionFormat;
+    clearValuePosition.Color[0] = 0.0f;
+    clearValuePosition.Color[1] = 0.0f;
+    clearValuePosition.Color[2] = 0.0f;
+    clearValuePosition.Color[3] = 0.0f;
 
     ThrowIfFailed(device->CreateCommittedResource(
         &heapProps,
         D3D12_HEAP_FLAG_NONE,
         &texDesc,
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        &clearValues[GBUFFER_POSITION],
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, // Изменено с RENDER_TARGET
+        &clearValuePosition,
         IID_PPV_ARGS(&mTextures[GBUFFER_POSITION])
     ));
 

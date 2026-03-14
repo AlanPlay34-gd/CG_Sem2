@@ -31,4 +31,6 @@ add_executable(CG_Sem2
         src/GBuffer.cpp
         h/GBuffer.h
         h/Light.h
+        src/RenderingSystem.cpp
+        h/RenderingSystem.h
 )

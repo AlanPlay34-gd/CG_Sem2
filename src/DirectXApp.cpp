@@ -23,6 +23,7 @@ DirectXApp::DirectXApp(Window& window) : window(window)
     XMStoreFloat4x4(&mWorld, XMMatrixIdentity());
     XMStoreFloat4x4(&mView, XMMatrixIdentity());
     XMStoreFloat4x4(&mProj, XMMatrixIdentity());
+    mRenderingSystem = nullptr;
 }
 
 DirectXApp::~DirectXApp() {
@@ -291,8 +292,10 @@ void DirectXApp::BuildPSO()
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
     // 9. Render Targets
-    psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.NumRenderTargets = 3;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;      // Albedo
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT; // Normal
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R32G32B32A32_FLOAT; // Position
 
     // 10. Формат Depth/Stencil
     psoDesc.DSVFormat = mDepthStencilFormat;
@@ -403,19 +406,17 @@ void DirectXApp::Shutdown() {
     // Освобождаем PSO
     mPSO.Reset();
     mRootSignature.Reset();
-    mLightingPSO.Reset();
-    mLightingRootSignature.Reset();
 
-    // Освобождаем G-буфер
-    if (mGBuffer)
+    if (mRenderingSystem)
     {
-        mGBuffer->Shutdown();
-        mGBuffer.reset();
+        mRenderingSystem->Shutdown();
+        mRenderingSystem.reset();
     }
+
 
     // Освобождаем constant buffers
     mObjectCB.reset();
-    mLightingCB.reset();
+
 
     FlushCommandQueue();
 
@@ -735,33 +736,29 @@ void DirectXApp::SetViewportAndScissor() {
 }
 
 bool DirectXApp::Initialize() {
-    #if defined(_DEBUG)
+#if defined(_DEBUG)
+    {
+        ComPtr<ID3D12Debug> debugController;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
         {
-            ComPtr<ID3D12Debug> debugController;
-            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
-            {
-                debugController->EnableDebugLayer();
-            }
+            debugController->EnableDebugLayer();
         }
-    #endif
+    }
+#endif
     //MessageBox(NULL, L"Starting DirectX 12 initialization...", L"Info", MB_OK);
 
-    // Основные этапы инициализации
     if (!CreateDXGIFactory()) return false;
     if (!CreateD3DDevice()) return false;
     if (!CreateCommandObjects()) return false;
     if (!CreateFence()) return false;
     if (!CreateSwapChain()) return false;
-
     QueryDescriptorSizes();
-
     if (!CreateDescriptorHeaps()) return false;
     if (!CreateRenderTargetViews()) return false;
     if (!CreateDepthStencilBuffer()) return false;
-
     CreateViewportAndScissor();
 
-   //Геометрия и ресурсы
+    //Геометрия и ресурсы
     BuildInputLayout();
     BuildObj("../assets/sponza.obj");
     std::vector<ParsedMaterial> parsed;
@@ -827,17 +824,68 @@ bool DirectXApp::Initialize() {
     BuildPSO();
     BuildConstantBuffer();
 
-    BuildRootSignature();
-    BuildShaders();
-    BuildPSO();
-    BuildConstantBuffer();
+    mLights.clear();
 
-    // НОВОЕ: Создаем G-буфер и ресурсы освещения
-    if (!CreateGBuffer())
-        return false;
+    // 1. Ambient
+    mLights.push_back(Light::CreateAmbientLight(DirectX::XMFLOAT3(0.1f, 0.1f, 0.01f)));
 
-    if (!CreateLightingResources())
+    // 2. Spot light 1
+    mLights.push_back(Light::CreateSpotLight(
+        DirectX::XMFLOAT3(0.0f, -2.0f, 0.0f),
+        DirectX::XMFLOAT3(0.3f, 0.5f, 1.0f),
+        DirectX::XMFLOAT3(0.3f, 0.5f, 1.0f),
+        2.5f,
+        12.0f,
+        XM_PIDIV4));
+
+    // 3. Spot light 2
+    mLights.push_back(Light::CreateSpotLight(
+        DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),
+        DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f),
+        DirectX::XMFLOAT3(1.0f, 0.0f, 0.0f),
+        15.0f,
+        60.0f,
+        XM_PIDIV2));
+
+    // 4. Point light 1
+    mLights.push_back(Light::CreatePointLight(
+        DirectX::XMFLOAT3(5.0f, 3.0f, 0.0f),
+        DirectX::XMFLOAT3(0.3f, 1.0f, 0.3f),
+        3.0f,
+        5.0f));
+
+    // 5. Directional light
+    mLights.push_back(Light::CreateDirectionalLight(
+        DirectX::XMFLOAT3(0.5f, -1.0f, 0.3f),
+        DirectX::XMFLOAT3(1.0f, 0.95f, 0.9f),
+        1.0f));
+
+    // 6. Point light 2
+    mLights.push_back(Light::CreatePointLight(
+        DirectX::XMFLOAT3(3.0f, 2.0f, 2.0f),
+        DirectX::XMFLOAT3(1.0f, 1.0f, 0.0f),
+        2.5f,
+        12.0f));
+    mLightingCB = std::make_unique<UploadBuffer<LightConstants>>(
+        device.Get(),
+        (UINT)mLights.size(),
+        true);
+
+
+    mRenderingSystem = std::make_unique<RenderingSystem>(
+    device.Get(),
+    mCommandQueue.Get(),
+    mCommandList.Get(),
+    mDirectCmdListAlloc.Get(),
+    mFence.Get(),
+    SwapChainBufferCount,
+    mBackBufferFormat);
+
+    if (!mRenderingSystem->Initialize(mClientWidth, mClientHeight))
+    {
+        MessageBox(NULL, L"Failed to initialize rendering system", L"Error", MB_OK);
         return false;
+    }
 
     // Инициализация проекционной матрицы
     XMMATRIX P = XMMatrixPerspectiveFovLH(0.25f * XM_PI,
@@ -920,6 +968,8 @@ int DirectXApp::Run() {
     return (int)msg.wParam;
 }
 
+
+
 void DirectXApp::CalculateFrameStats() {
     mFrameCount++;
     if ((mTimer.TotalTime() - mTimeElapsed) >= 1.0f) {
@@ -936,408 +986,6 @@ void DirectXApp::CalculateFrameStats() {
         mFrameCount = 0;
         mTimeElapsed += 1.0f;
     }
-}
-
-bool DirectXApp::CreateLightingResources()
-{
-    // Создаем constant buffer для освещения
-
-
-    mLights.clear();
-
-    // 1. Ambient - мягкий фоновый свет
-    mLights.push_back(Light::CreateAmbientLight(XMFLOAT3(0.3f, 0.3f, 0.3f)));
-
-
-    mLights.push_back(Light::CreateSpotLight(
-        XMFLOAT3(0.0f, -2.0f, 0.0f),
-        XMFLOAT3(0.3f, 0.5f, 1.0f),
-        XMFLOAT3(0.3f, 0.5f, 1.0f),
-        2.5f,
-        12.0f,
-        XM_PIDIV4));
-
-    // Прожектор (исправленный)
-    mLights.push_back(Light::CreateSpotLight(
-        XMFLOAT3(0.0f, 0.0f, 0.0f),
-        XMFLOAT3(-1.0f, -1.0f, 1.0f),  // ВНИЗ!
-        XMFLOAT3(1.0f, 0.9f, 0.7f),
-        15.0f,
-        50.0f,
-        XM_PIDIV4));  // 60 градусов
-
-    mLights.push_back(Light::CreatePointLight(
-        XMFLOAT3(0.0f, -5.0f, 0.0f),
-        XMFLOAT3(0.3f, 1.0f, 0.3f),
-        3.0f,
-        15.0f));
-
-    mLights.push_back(Light::CreateDirectionalLight(
-        XMFLOAT3(0.5f, -1.0f, 0.3f),
-        XMFLOAT3(1.0f, 0.95f, 0.9f),
-        1.5f));  // увеличили интенсивность
-
-    // Point lights - увеличим интенсивность и радиус
-    mLights.push_back(Light::CreatePointLight(
-        XMFLOAT3(3.0f, 2.0f, 2.0f),
-        XMFLOAT3(1.0f, 0.3f, 0.3f),
-        2.5f,    // увеличили
-        12.0f));  // увеличили радиус
-
-    mLightingCB = std::make_unique<UploadBuffer<LightConstants>>(
-        device.Get(),
-        (UINT)mLights.size(),   // количество элементов
-        true
-    );
-
-    // Загружаем шейдеры
-    auto vsLighting = d3dUtil::CompileShader(
-        L"../src/lighting.hlsl",
-        nullptr,
-        "VS",
-        "vs_5_0");
-
-    if (!vsLighting) return false;
-
-    auto psLighting = d3dUtil::CompileShader(
-        L"../src/lighting.hlsl",
-        nullptr,
-        "PS",
-        "ps_5_0");
-
-    if (!psLighting) return false;
-
-    // ============= ROOT SIGNATURE с ТРЕМЯ текстурами =============
-    D3D12_DESCRIPTOR_RANGE srvRanges[3];
-
-    // Диапазон для t0 (Albedo)
-    srvRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRanges[0].NumDescriptors = 1;
-    srvRanges[0].BaseShaderRegister = 0;
-    srvRanges[0].RegisterSpace = 0;
-    srvRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    // Диапазон для t1 (Normal)
-    srvRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRanges[1].NumDescriptors = 1;
-    srvRanges[1].BaseShaderRegister = 1;
-    srvRanges[1].RegisterSpace = 0;
-    srvRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    // Диапазон для t2 (Position)
-    srvRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRanges[2].NumDescriptors = 1;
-    srvRanges[2].BaseShaderRegister = 2;
-    srvRanges[2].RegisterSpace = 0;
-    srvRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-
-    D3D12_ROOT_PARAMETER rootParams[2] = {};
-
-    // Параметр 0: таблица дескрипторов с ТРЕМЯ текстурами
-    rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[0].DescriptorTable.NumDescriptorRanges = 3;
-    rootParams[0].DescriptorTable.pDescriptorRanges = srvRanges;
-    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-    // Параметр 1: CBV
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    rootParams[1].Descriptor.ShaderRegister = 0;
-    rootParams[1].Descriptor.RegisterSpace = 0;
-    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-    D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-    rootSigDesc.NumParameters = 2;
-    rootSigDesc.pParameters = rootParams;
-    rootSigDesc.NumStaticSamplers = 1;
-
-    // Статический сэмплер
-    D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.MipLODBias = 0;
-    sampler.MaxAnisotropy = 16;
-    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
-    sampler.MinLOD = 0;
-    sampler.MaxLOD = D3D12_FLOAT32_MAX;
-    sampler.ShaderRegister = 0;
-    sampler.RegisterSpace = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-    rootSigDesc.pStaticSamplers = &sampler;
-    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-
-    ComPtr<ID3DBlob> serializedRootSig;
-    ComPtr<ID3DBlob> errorBlob;
-
-    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
-                                             &serializedRootSig, &errorBlob);
-    if (FAILED(hr))
-    {
-        if (errorBlob)
-        {
-            std::string errorMsg = "Root signature serialization failed: ";
-            errorMsg += (char*)errorBlob->GetBufferPointer();
-            MessageBoxA(NULL, errorMsg.c_str(), "Error", MB_OK);
-        }
-        else
-        {
-            MessageBoxA(NULL, "Failed to serialize root signature", "Error", MB_OK);
-        }
-        return false;
-    }
-
-    hr = device->CreateRootSignature(0, serializedRootSig->GetBufferPointer(),
-                                     serializedRootSig->GetBufferSize(),
-                                     IID_PPV_ARGS(&mLightingRootSignature));
-    if (FAILED(hr))
-    {
-        MessageBoxA(NULL, "Failed to create root signature", "Error", MB_OK);
-        return false;
-    }
-
-    // ============= PSO с АДДИТИВНЫМ СМЕШИВАНИЕМ =============
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-
-    psoDesc.VS = { vsLighting->GetBufferPointer(), vsLighting->GetBufferSize() };
-    psoDesc.PS = { psLighting->GetBufferPointer(), psLighting->GetBufferSize() };
-    psoDesc.pRootSignature = mLightingRootSignature.Get();
-    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = mBackBufferFormat;
-    psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    psoDesc.SampleDesc.Count = 1;
-    psoDesc.SampleDesc.Quality = 0;
-    psoDesc.SampleMask = UINT_MAX;
-
-    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    psoDesc.RasterizerState.DepthClipEnable = TRUE;
-
-    // ВАЖНО: правильное аддитивное смешивание
-    psoDesc.BlendState.AlphaToCoverageEnable = FALSE;
-    psoDesc.BlendState.IndependentBlendEnable = FALSE;
-
-    // Настройка для первого (и единственного) render target
-    psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
-    psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
-    psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;   // Аддитивное!
-    psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
-    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-
-    psoDesc.DepthStencilState.DepthEnable = FALSE;
-    psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-    psoDesc.InputLayout = { nullptr, 0 };
-
-    hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mLightingPSO));
-    if (FAILED(hr))
-    {
-        char msg[256];
-        sprintf_s(msg, "PSO create failed: 0x%08X", hr);
-        MessageBoxA(NULL, msg, "Error", MB_OK);
-        return false;
-    }
-    else
-    {
-        MessageBoxA(NULL, "Lighting PSO created SUCCESSFULLY!", "Success", MB_OK);
-    }
-
-    return true;
-}
-
-void DirectXApp::GeometryPass(const Timer& gt)
-{
-    if (mIndexCount == 0)
-        return;
-
-    mDirectCmdListAlloc->Reset();
-    mCommandList->Reset(mDirectCmdListAlloc.Get(), mPSO.Get());
-
-    // Переводим G-буфер текстуры в состояние RENDER_TARGET
-    D3D12_RESOURCE_BARRIER barriers[GBuffer::GBUFFER_COUNT + 1];
-
-    for (int i = 0; i < GBuffer::GBUFFER_COUNT; ++i)
-    {
-        barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
-            mGBuffer->GetTexture((GBuffer::GBUFFER_TEXTURE_TYPE)i),
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET);
-    }
-
-    // Переводим depth buffer в состояние DEPTH_WRITE
-    barriers[GBuffer::GBUFFER_COUNT] = CD3DX12_RESOURCE_BARRIER::Transition(
-        mDepthStencilBuffer.Get(),
-        D3D12_RESOURCE_STATE_DEPTH_READ,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE);
-
-    mCommandList->ResourceBarrier(GBuffer::GBUFFER_COUNT + 1, barriers);
-
-    // Очищаем G-буфер
-    mGBuffer->ClearRenderTargets(mCommandList.Get());
-
-    // Очищаем depth buffer
-    mCommandList->ClearDepthStencilView(
-        DepthStencilView(),
-        D3D12_CLEAR_FLAG_DEPTH,
-        1.0f,
-        0,
-        0,
-        nullptr);
-
-    // Устанавливаем render targets G-буфера
-    mGBuffer->SetRenderTargets(mCommandList.Get(), mGBuffer->mRtvHeap.Get(), DepthStencilView());
-
-    SetViewportAndScissor();
-
-    // Устанавливаем корневую сигнатуру и дескрипторы для геометрии
-    mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
-
-    ID3D12DescriptorHeap* heaps[] = { mCbvHeap.Get() };
-    mCommandList->SetDescriptorHeaps(1, heaps);
-
-    mCommandList->SetGraphicsRootDescriptorTable(0, mCbvHeap->GetGPUDescriptorHandleForHeapStart());
-
-    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
-    mCommandList->IASetIndexBuffer(&mIndexBufferView);
-
-    // Рисуем все субмеши (как в вашем оригинальном Draw)
-    for (auto& sm : mSubmeshes)
-    {
-        Material* mat = nullptr;
-        for (auto& m : mMaterials)
-        {
-            if (m.Name == sm.MaterialName)
-            {
-                mat = &m;
-                break;
-            }
-        }
-
-        if (!mat) continue;
-
-        D3D12_GPU_DESCRIPTOR_HANDLE srvHandle1 =
-            mCbvHeap->GetGPUDescriptorHandleForHeapStart();
-        srvHandle1.ptr += (1 + mat->SrvHeapIndex) * mCbvSrvUavDescriptorSize;
-        mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle1);
-
-        D3D12_GPU_DESCRIPTOR_HANDLE srvHandle2 =
-            mCbvHeap->GetGPUDescriptorHandleForHeapStart();
-        srvHandle2.ptr += (1 + mMaterials.size()) * mCbvSrvUavDescriptorSize;
-
-        bool isFloor = (mat->Name.find("floor") != std::string::npos);
-        mCommandList->SetGraphicsRootDescriptorTable(2, isFloor ? srvHandle2 : srvHandle1);
-
-        mCommandList->DrawIndexedInstanced(sm.IndexCount, 1, sm.IndexStart, 0, 0);
-    }
-    D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-    mGBuffer->GetTexture(GBuffer::GBUFFER_ALBEDO),
-    D3D12_RESOURCE_STATE_RENDER_TARGET,
-    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    mCommandList->ResourceBarrier(1, &barrier);
-    // Переводим G-буфер текстуры в состояние PIXEL_SHADER_RESOURCE для прохода освещения
-    for (int i = 0; i < GBuffer::GBUFFER_COUNT; ++i)
-    {
-        barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
-            mGBuffer->GetTexture((GBuffer::GBUFFER_TEXTURE_TYPE)i),
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    }
-
-    // Переводим depth buffer в состояние DEPTH_READ
-    barriers[GBuffer::GBUFFER_COUNT] = CD3DX12_RESOURCE_BARRIER::Transition(
-        mDepthStencilBuffer.Get(),
-        D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        D3D12_RESOURCE_STATE_DEPTH_READ);
-
-    mCommandList->ResourceBarrier(GBuffer::GBUFFER_COUNT + 1, barriers);
-
-    mCommandList->Close();
-
-    ID3D12CommandList* cmdLists[] = { mCommandList.Get() };
-    mCommandQueue->ExecuteCommandLists(1, cmdLists);
-    FlushCommandQueue();
-}
-
-void DirectXApp::LightingPass(const Timer& gt)
-{
-    mDirectCmdListAlloc->Reset();
-    mCommandList->Reset(mDirectCmdListAlloc.Get(), mLightingPSO.Get());
-
-    // Переводим back buffer в состояние RENDER_TARGET
-    D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        CurrentBackBuffer(),
-        D3D12_RESOURCE_STATE_PRESENT,
-        D3D12_RESOURCE_STATE_RENDER_TARGET);
-    mCommandList->ResourceBarrier(1, &barrier);
-
-    SetViewportAndScissor();
-
-    // Очищаем back buffer черным
-    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    auto rtvHandle = CurrentBackBufferView();
-    mCommandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-
-    // ВАЖНО: НИКАКОГО DEPTH STENCIL!
-    mCommandList->OMSetRenderTargets(1, &rtvHandle, true, nullptr);  // Без depth!
-
-    mCommandList->SetGraphicsRootSignature(mLightingRootSignature.Get());
-    ID3D12DescriptorHeap* heaps[] = { mGBuffer->mSrvHeap.Get() };
-    mCommandList->SetDescriptorHeaps(1, heaps);
-    mCommandList->SetGraphicsRootDescriptorTable(0, mGBuffer->mSrvHeap->GetGPUDescriptorHandleForHeapStart());
-
-    // Получаем базовый адрес буфера и размер одного элемента
-    D3D12_GPU_VIRTUAL_ADDRESS baseAddr = mLightingCB->Resource()->GetGPUVirtualAddress();
-    UINT elementSize = mLightingCB->GetElementSize();
-
-    for (size_t i = 0; i < mLights.size(); ++i)
-    {
-        LightConstants lightConstants;
-        lightConstants.SetFromLight(mLights[i], mEyePos);
-
-        // Копируем данные в i-й элемент буфера
-        mLightingCB->CopyData((UINT)i, lightConstants);
-
-        // Устанавливаем CBV на этот элемент
-        D3D12_GPU_VIRTUAL_ADDRESS cbAddr = baseAddr + i * elementSize;
-        mCommandList->SetGraphicsRootConstantBufferView(1, cbAddr);
-
-        // Рисуем полный экранный квад (3 вершины)
-        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        mCommandList->DrawInstanced(3, 1, 0, 0);
-    }
-
-    barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        CurrentBackBuffer(),
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PRESENT);
-    mCommandList->ResourceBarrier(1, &barrier);
-
-    mCommandList->Close();
-
-    ID3D12CommandList* cmdLists[] = { mCommandList.Get() };
-    mCommandQueue->ExecuteCommandLists(1, cmdLists);
-
-    mSwapChain->Present(0, 0);
-    mCurrBackBuffer = (mCurrBackBuffer + 1) % SwapChainBufferCount;
-
-    FlushCommandQueue();
-}
-
-bool DirectXApp::CreateGBuffer()
-{
-    mGBuffer = std::make_unique<GBuffer>();
-    if (!mGBuffer->Initialize(device.Get(), mClientWidth, mClientHeight))
-    {
-        MessageBox(NULL, L"Failed to create GBuffer", L"Error", MB_OK);
-        return false;
-    }
-    return true;
 }
 
 void DirectXApp::Update(const Timer& gt)
@@ -1363,24 +1011,26 @@ void DirectXApp::Update(const Timer& gt)
 
     // ===== Movement =====
     XMVECTOR pos = XMLoadFloat3(&mEyePos);
+    XMVECTOR delta = XMVectorZero();
 
     if (GetAsyncKeyState('W') & 0x8000)
-        pos += forwardVec * speed * dt;
+        delta = XMVectorAdd(delta, XMVectorScale(forwardVec, speed * dt));
     if (GetAsyncKeyState('S') & 0x8000)
-        pos -= forwardVec * speed * dt;
+        delta = XMVectorSubtract(delta, XMVectorScale(forwardVec, speed * dt));
     if (GetAsyncKeyState('A') & 0x8000)
-        pos -= rightVec * speed * dt;
+        delta = XMVectorSubtract(delta, XMVectorScale(rightVec, speed * dt));
     if (GetAsyncKeyState('D') & 0x8000)
-        pos += rightVec * speed * dt;
+        delta = XMVectorAdd(delta, XMVectorScale(rightVec, speed * dt));
     if (GetAsyncKeyState(VK_UP) & 0x8000)
-        pos += XMVectorSet(0, 1, 0, 0) * speed * dt;
+        delta = XMVectorAdd(delta, XMVectorScale(XMVectorSet(0, 1, 0, 0), speed * dt));
     if (GetAsyncKeyState(VK_DOWN) & 0x8000)
-        pos -= XMVectorSet(0, 1, 0, 0) * speed * dt;
+        delta = XMVectorSubtract(delta, XMVectorScale(XMVectorSet(0, 1, 0, 0), speed * dt));
 
+    pos = XMVectorAdd(pos, delta);
     XMStoreFloat3(&mEyePos, pos);
 
     // ===== View Matrix =====
-    XMVECTOR target = pos + forwardVec;
+    XMVECTOR target = XMVectorAdd(pos, forwardVec);
     XMVECTOR up = XMVectorSet(0, 1, 0, 0);
 
     XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
@@ -1444,7 +1094,7 @@ void DirectXApp::Update(const Timer& gt)
     mObjectCB->CopyData(0, objConstants);
 
     // ===== ОБНОВЛЕНИЕ ПАРАМЕТРОВ ОСВЕЩЕНИЯ =====
-    if (mLightingCB)
+    if (mRenderingSystem)
     {
         LightConstants lightConstants;  // Используем новую структуру
 
@@ -1469,11 +1119,38 @@ void DirectXApp::Update(const Timer& gt)
 
 void DirectXApp::Draw(const Timer& gt)
 {
-    // Проход 1: Геометрия (заполняем G-буфер)
-    GeometryPass(gt);
+    mRenderingSystem->GeometryPass(
+        mPSO.Get(),
+        mRootSignature.Get(),
+        mCbvHeap.Get(),
+        mCbvSrvUavDescriptorSize,
+        mSubmeshes,
+        mMaterials,
+        mVertexBufferGPU.Get(),
+        mIndexBufferGPU.Get(),
+        mVertexBufferView,
+        mIndexBufferView,
+        mDepthStencilBuffer.Get(),
+        DepthStencilView(),
+        mScreenViewport,
+        mScissorRect,
+        (UINT)mMaterials.size(),
+        mSecondaryTexture.Get());
+    mRenderingSystem->LightingPass(
+        CurrentBackBuffer(),
+        CurrentBackBufferView(),
+        mLights,
+        mEyePos,
+        mScreenViewport,
+        mScissorRect,
+        mCurrBackBuffer,
+        mSwapChain.Get(),
+        mRenderingSystem->GetLightingPSO(),
+        mRenderingSystem->GetLightingRootSignature(),
+        mRenderingSystem->GetLightingCB(),
+        mRenderingSystem->GetGBuffer());
+    FlushCommandQueue(); // ОДИН РАЗ В КОНЦЕ!
 
-    // Проход 2: Освещение (используем G-буфер для расчета освещения)
-    LightingPass(gt);
 }
 
 void DirectXApp::CreateTextureFromTGA(

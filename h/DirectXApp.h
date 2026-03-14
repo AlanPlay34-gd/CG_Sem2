@@ -13,6 +13,7 @@
 #include "../h/Timer.h"
 #include "../h/UploadBuffer.h"
 #include "../h/vertex.h"
+#include "RenderingSystem.h"
 #include "Light.h"
 #include "Material.h"
 #include "MathHelper.h"
@@ -63,28 +64,8 @@ public:
 private:
 
     std::vector<Light> mLights;
-    // Структура для параметров освещения
-    struct LightingConstants
-    {
-        DirectX::XMFLOAT3 LightPos;
-        float LightIntensity;
-        DirectX::XMFLOAT3 LightColor;
-        float AmbientIntensity;
-        DirectX::XMFLOAT3 CameraPos;
-        float Padding;  // Для выравнивания до 16 байт
-    };
-    // =========== Deferred Shading ===========
-    std::unique_ptr<GBuffer> mGBuffer;
-    Microsoft::WRL::ComPtr<ID3D12PipelineState> mLightingPSO;
-    Microsoft::WRL::ComPtr<ID3D12RootSignature> mLightingRootSignature;
+    std::unique_ptr<RenderingSystem> mRenderingSystem;
     std::unique_ptr<UploadBuffer<LightConstants>> mLightingCB;
-
-    // Добавьте новые методы:
-    bool CreateGBuffer();
-    bool CreateLightingResources();
-    void GeometryPass(const Timer& gt);
-    void LightingPass(const Timer& gt);
-
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mSecondaryTexture;
     float mChessTileSize = 0.5f;
