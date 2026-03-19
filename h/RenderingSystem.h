@@ -11,6 +11,7 @@
 #include "Submesh.h"
 #include "Material.h"
 #include "GBuffer.h"
+#include "CameraConstants.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -60,6 +61,7 @@ public:
         ID3D12PipelineState* lightingPSO,
         ID3D12RootSignature* lightingRootSignature,
         UploadBuffer<LightConstants>* lightingCB,
+        UploadBuffer<CameraConstants>* cameraCB,
         GBuffer* gBuffer);
 
     void Shutdown();

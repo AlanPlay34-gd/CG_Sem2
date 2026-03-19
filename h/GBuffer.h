@@ -12,8 +12,8 @@ public:
     enum GBUFFER_TEXTURE_TYPE
     {
         GBUFFER_ALBEDO = 0,  // RGB - Albedo, A - unused
-        GBUFFER_NORMAL,       // RGB - Normal, A - unused
-        GBUFFER_POSITION,     // RGB - Position, A - unused
+        GBUFFER_NORMAL,      // RGB - Normal, A - unused
+        GBUFFER_DEPTH,
         GBUFFER_COUNT
     };
 
@@ -62,5 +62,5 @@ private:
     // Форматы текстур
     static constexpr DXGI_FORMAT mAlbedoFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT mNormalFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;  // Для точности нормалей
-    static constexpr DXGI_FORMAT mPositionFormat = DXGI_FORMAT_R32G32B32A32_FLOAT; // Для точности позиций
+    static constexpr DXGI_FORMAT mDepthFormat = DXGI_FORMAT_R32_FLOAT;
 };

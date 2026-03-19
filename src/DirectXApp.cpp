@@ -295,7 +295,7 @@ void DirectXApp::BuildPSO()
     psoDesc.NumRenderTargets = 3;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;      // Albedo
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R16G16B16A16_FLOAT; // Normal
-    psoDesc.RTVFormats[2] = DXGI_FORMAT_R32G32B32A32_FLOAT; // Position
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R32_FLOAT;
 
     // 10. Формат Depth/Stencil
     psoDesc.DSVFormat = mDepthStencilFormat;
@@ -824,6 +824,11 @@ bool DirectXApp::Initialize() {
     BuildPSO();
     BuildConstantBuffer();
 
+    mCameraCB = std::make_unique<UploadBuffer<CameraConstants>>(
+        device.Get(),
+        1,
+        true);
+
     mLights.clear();
 
     // 1. Ambient
@@ -996,18 +1001,18 @@ void DirectXApp::Update(const Timer& gt)
     // ===== Forward Vector =====
     XMFLOAT3 forward =
     {
-        cosf(mPitch) * cosf(mYaw),
-        sinf(mPitch),
-        cosf(mPitch) * sinf(mYaw)
+        cosf(mPitch) * cosf(mYaw),   // X
+        sinf(mPitch),                 // Y
+        cosf(mPitch) * sinf(mYaw)    // Z
     };
 
     XMVECTOR forwardVec = XMLoadFloat3(&forward);
     forwardVec = XMVector3Normalize(forwardVec);
 
-    XMVECTOR rightVec = XMVector3Normalize(
-        XMVector3Cross(
-            XMVectorSet(0, 1, 0, 0),
-            forwardVec));
+    XMVECTOR worldUp = XMVectorSet(0, 1, 0, 0);
+    XMVECTOR rightVec = XMVector3Normalize(XMVector3Cross(worldUp, forwardVec));
+
+    XMVECTOR upVec = XMVector3Normalize(XMVector3Cross(forwardVec, rightVec));
 
     // ===== Movement =====
     XMVECTOR pos = XMLoadFloat3(&mEyePos);
@@ -1026,23 +1031,30 @@ void DirectXApp::Update(const Timer& gt)
     if (GetAsyncKeyState(VK_DOWN) & 0x8000)
         delta = XMVectorSubtract(delta, XMVectorScale(XMVectorSet(0, 1, 0, 0), speed * dt));
 
-    pos = XMVectorAdd(pos, delta);
+    if (XMVectorGetX(XMVector3LengthSq(delta)) > 0.0f)
+        delta = XMVector3Normalize(delta) * speed * dt;
+    pos += delta;
     XMStoreFloat3(&mEyePos, pos);
 
     // ===== View Matrix =====
-    XMVECTOR target = XMVectorAdd(pos, forwardVec);
-    XMVECTOR up = XMVectorSet(0, 1, 0, 0);
-
-    XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
+    XMMATRIX view = XMMatrixLookToLH(pos, forwardVec, upVec);
     XMStoreFloat4x4(&mView, view);
-
     // ===== Projection =====
     XMMATRIX proj = XMMatrixPerspectiveFovLH(
         XM_PIDIV4,
-        (float)mClientWidth / (float)mClientHeight,
+        static_cast<float>(mClientWidth) / static_cast<float>(mClientHeight),
         0.1f,
         1000.0f);
     XMStoreFloat4x4(&mProj, proj);
+
+    XMMATRIX viewProj = view * proj;
+    XMMATRIX invViewProj = XMMatrixInverse(nullptr, viewProj);
+
+    CameraConstants camConstants;
+    XMStoreFloat4x4(&camConstants.mInvViewProj, XMMatrixTranspose(invViewProj));
+    camConstants.mCameraPos = mEyePos;                     // позиция камеры
+    camConstants.mScreenSize = { (float)mClientWidth, (float)mClientHeight };
+    mCameraCB->CopyData(0, camConstants);
 
     // ===== TEXTURE ANIMATION =====
     if (mAnimateTextures)
@@ -1083,8 +1095,11 @@ void DirectXApp::Update(const Timer& gt)
     XMMATRIX worldViewProj = world * view * proj;
 
     ObjectConstants objConstants;
-    XMStoreFloat4x4(&objConstants.mWorldViewProj,
-        XMMatrixTranspose(worldViewProj));
+    XMStoreFloat4x4(&objConstants.mWorld, XMMatrixTranspose(world));
+    XMStoreFloat4x4(&objConstants.mWorldViewProj, XMMatrixTranspose(worldViewProj));
+    objConstants.mUVTransform = XMFLOAT4(mUVScaleU, mUVScaleV, mUVOffsetU, mUVOffsetV);
+    objConstants.mChessboardParams = XMFLOAT4(mChessTileSize, 0, 0, 0);
+    mObjectCB->CopyData(0, objConstants);
 
     objConstants.mUVTransform.x = mUVScaleU;
     objConstants.mUVTransform.y = mUVScaleV;
@@ -1148,7 +1163,9 @@ void DirectXApp::Draw(const Timer& gt)
         mRenderingSystem->GetLightingPSO(),
         mRenderingSystem->GetLightingRootSignature(),
         mRenderingSystem->GetLightingCB(),
+        mCameraCB.get(),
         mRenderingSystem->GetGBuffer());
+
     FlushCommandQueue(); // ОДИН РАЗ В КОНЦЕ!
 
 }

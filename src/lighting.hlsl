@@ -1,6 +1,6 @@
 Texture2D gAlbedoMap : register(t0);
 Texture2D gNormalMap : register(t1);
-Texture2D gPositionMap : register(t2);
+Texture2D gDepthMap : register(t2);
 SamplerState gSampler : register(s0);
 
 cbuffer cbLighting : register(b0)
@@ -16,6 +16,16 @@ cbuffer cbLighting : register(b0)
     float3 gCameraPos;
     float padding;
 };
+
+cbuffer cbCamera : register(b1)
+{
+    float4x4 mInvViewProj;
+    float3 mCameraPos;
+    float padding1;
+    float2 mScreenSize;
+    float2 padding2;
+};
+
 
 // Константы для типов света
 static const int LIGHT_AMBIENT = 0;
@@ -34,6 +44,20 @@ struct PSInput
     float2 TexC : TEXCOORD;
 };
 
+float3 ReconstructWorldPos(float2 texCoord, float depth, float4x4 invViewProj)
+{
+    // Конвертируем texCoord в NDC [-1, 1]
+    float x = texCoord.x * 2.0f - 1.0f;
+    float y = (1.0f - texCoord.y) * 2.0f - 1.0f;  // Инвертируем Y
+
+    // Восстанавливаем позицию в клип-пространстве
+    float4 clipPos = float4(x, y, depth, 1.0f);
+
+    // Переводим в мировое пространство
+    float4 worldPos = mul(clipPos, invViewProj);
+    return worldPos.xyz / worldPos.w;
+}
+
 PSInput VS(VSInput vin)
 {
     PSInput vout;
@@ -47,13 +71,15 @@ float4 PS(PSInput pin) : SV_Target
 {
     float4 albedo = gAlbedoMap.Sample(gSampler, pin.TexC);
     float4 normalData = gNormalMap.Sample(gSampler, pin.TexC);
-    float4 positionData = gPositionMap.Sample(gSampler, pin.TexC);
+    float depth = gDepthMap.Sample(gSampler, pin.TexC).r;  // Только красный канал
 
-    float3 worldPos = positionData.xyz;
+    // Восстанавливаем мировую позицию
+    float3 worldPos = ReconstructWorldPos(pin.TexC, depth, mInvViewProj);
     float3 normal = normalize(normalData.xyz);
 
-    // Если позиция нулевая (фон), ничего не добавляем
-    if (length(worldPos) < 0.001f)
+    float3 viewDir = normalize(mCameraPos - worldPos);
+    // Проверка на фон (по глубине)
+    if (depth > 0.99999f)  // или другое значение для бесконечности
         return float4(0, 0, 0, 0);
 
     float3 result = float3(0, 0, 0);

@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 #include "../h/ObjectConstants.h"
 #include "../h/Timer.h"
+#include "../h/CameraConstants.h"
 #include "../h/UploadBuffer.h"
 #include "../h/vertex.h"
 #include "RenderingSystem.h"
@@ -124,6 +125,8 @@ private:
 
     DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     DXGI_FORMAT mDepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+
+    std::unique_ptr<UploadBuffer<CameraConstants>> mCameraCB;
 
     // ScreenSize
     int mClientWidth = 800;

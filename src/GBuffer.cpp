@@ -78,22 +78,21 @@ bool GBuffer::CreateTextures(ID3D12Device* device)
         IID_PPV_ARGS(&mTextures[GBUFFER_NORMAL])
     ));
 
-    // Position texture
-    texDesc.Format = mPositionFormat;
-    D3D12_CLEAR_VALUE clearValuePosition = {};
-    clearValuePosition.Format = mPositionFormat;
-    clearValuePosition.Color[0] = 0.0f;
-    clearValuePosition.Color[1] = 0.0f;
-    clearValuePosition.Color[2] = 0.0f;
-    clearValuePosition.Color[3] = 0.0f;
+    // Depth texture (просто R32_FLOAT)
+    texDesc.Format = mDepthFormat;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE clearValueDepth = {};
+    clearValueDepth.Format = mDepthFormat;
+    clearValueDepth.Color[0] = 1.0f;  // Бесконечность
 
     ThrowIfFailed(device->CreateCommittedResource(
         &heapProps,
         D3D12_HEAP_FLAG_NONE,
         &texDesc,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, // Изменено с RENDER_TARGET
-        &clearValuePosition,
-        IID_PPV_ARGS(&mTextures[GBUFFER_POSITION])
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &clearValueDepth,
+        IID_PPV_ARGS(&mTextures[GBUFFER_DEPTH])
     ));
 
     return true;
@@ -119,7 +118,7 @@ bool GBuffer::CreateRTVs(ID3D12Device* device)
     {
         D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
         rtvDesc.Format = (i == GBUFFER_ALBEDO) ? mAlbedoFormat :
-                         (i == GBUFFER_NORMAL) ? mNormalFormat : mPositionFormat;
+                         (i == GBUFFER_NORMAL) ? mNormalFormat :mDepthFormat;
         rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
 
         device->CreateRenderTargetView(mTextures[i].Get(), &rtvDesc, rtvHandle);
@@ -151,7 +150,7 @@ bool GBuffer::CreateSRVs(ID3D12Device* device)
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Format = (i == GBUFFER_ALBEDO) ? mAlbedoFormat :
-                         (i == GBUFFER_NORMAL) ? mNormalFormat : mPositionFormat;
+                         (i == GBUFFER_NORMAL) ? mNormalFormat : mDepthFormat;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
 
@@ -180,27 +179,15 @@ D3D12_CPU_DESCRIPTOR_HANDLE GBuffer::GetSRV(GBUFFER_TEXTURE_TYPE type) const
 void GBuffer::ClearRenderTargets(ID3D12GraphicsCommandList* cmdList,
                                  const float* clearColorAlbedo,
                                  const float* clearColorNormal,
-                                 const float* clearColorPosition)
+                                 const float* clearColorDepth) // переименовать
 {
-    // Значения очистки по умолчанию
     float defaultClearAlbedo[] = { 0.0f, 0.0f, 0.0f, 1.0f };
     float defaultClearNormal[] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    float defaultClearPosition[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float defaultClearDepth[] = { 1.0f, 0.0f, 0.0f, 0.0f };   // глубина = 1.0
 
-    cmdList->ClearRenderTargetView(
-        GetRTV(GBUFFER_ALBEDO),
-        clearColorAlbedo ? clearColorAlbedo : defaultClearAlbedo,
-        0, nullptr);
-
-    cmdList->ClearRenderTargetView(
-        GetRTV(GBUFFER_NORMAL),
-        clearColorNormal ? clearColorNormal : defaultClearNormal,
-        0, nullptr);
-
-    cmdList->ClearRenderTargetView(
-        GetRTV(GBUFFER_POSITION),
-        clearColorPosition ? clearColorPosition : defaultClearPosition,
-        0, nullptr);
+    cmdList->ClearRenderTargetView(GetRTV(GBUFFER_ALBEDO), clearColorAlbedo ? clearColorAlbedo : defaultClearAlbedo, 0, nullptr);
+    cmdList->ClearRenderTargetView(GetRTV(GBUFFER_NORMAL), clearColorNormal ? clearColorNormal : defaultClearNormal, 0, nullptr);
+    cmdList->ClearRenderTargetView(GetRTV(GBUFFER_DEPTH),   clearColorDepth ? clearColorDepth : defaultClearDepth, 0, nullptr);
 }
 
 void GBuffer::SetRenderTargets(ID3D12GraphicsCommandList* cmdList,
@@ -210,7 +197,7 @@ void GBuffer::SetRenderTargets(ID3D12GraphicsCommandList* cmdList,
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[GBUFFER_COUNT] = {
         GetRTV(GBUFFER_ALBEDO),
         GetRTV(GBUFFER_NORMAL),
-        GetRTV(GBUFFER_POSITION)
+        GetRTV(GBUFFER_DEPTH)
     };
 
     cmdList->OMSetRenderTargets(GBUFFER_COUNT, rtvHandles, false, &dsvHandle);

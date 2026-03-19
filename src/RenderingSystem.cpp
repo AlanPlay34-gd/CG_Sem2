@@ -60,7 +60,11 @@ bool RenderingSystem::CreateLightingResources()
         "VS",
         "vs_5_0");
 
-    if (!vsLighting) return false;
+    if (!vsLighting)
+    {
+        OutputDebugStringA("Failed to compile lighting VS\n");
+        return false;
+    }
 
     auto psLighting = d3dUtil::CompileShader(
         L"../src/lighting.hlsl",
@@ -68,50 +72,68 @@ bool RenderingSystem::CreateLightingResources()
         "PS",
         "ps_5_0");
 
-    if (!psLighting) return false;
+    if (!psLighting)
+    {
+        OutputDebugStringA("Failed to compile lighting PS\n");
+        return false;
+    }
+
+
 
     // ============= ROOT SIGNATURE =============
     D3D12_DESCRIPTOR_RANGE srvRanges[3];
 
+    // SRV для Albedo (t0)
     srvRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRanges[0].NumDescriptors = 1;
     srvRanges[0].BaseShaderRegister = 0;
     srvRanges[0].RegisterSpace = 0;
     srvRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
+    // SRV для Normal (t1)
     srvRanges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRanges[1].NumDescriptors = 1;
     srvRanges[1].BaseShaderRegister = 1;
     srvRanges[1].RegisterSpace = 0;
     srvRanges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
+    // SRV для Depth (t2)
     srvRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     srvRanges[2].NumDescriptors = 1;
     srvRanges[2].BaseShaderRegister = 2;
     srvRanges[2].RegisterSpace = 0;
     srvRanges[2].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParams[2] = {};
+    D3D12_ROOT_PARAMETER rootParams[3] = {};
 
+    // Root Parameter 0: Descriptor table для G-buffer SRVs
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[0].DescriptorTable.NumDescriptorRanges = 3;
     rootParams[0].DescriptorTable.pDescriptorRanges = srvRanges;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    // Root Parameter 1: CBV для параметров света (b0)
     rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[1].Descriptor.ShaderRegister = 0;
     rootParams[1].Descriptor.RegisterSpace = 0;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    // Root Parameter 2: CBV для параметров камеры (b1)
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[2].Descriptor.ShaderRegister = 1;
+    rootParams[2].Descriptor.RegisterSpace = 0;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // Static Sampler
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;  // Изменено с WRAP на CLAMP для G-buffer
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MipLODBias = 0;
-    sampler.MaxAnisotropy = 16;
-    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    sampler.MaxAnisotropy = 1;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+    sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
     sampler.MinLOD = 0;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
     sampler.ShaderRegister = 0;
@@ -119,7 +141,7 @@ bool RenderingSystem::CreateLightingResources()
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-    rootSigDesc.NumParameters = 2;
+    rootSigDesc.NumParameters = 3;
     rootSigDesc.pParameters = rootParams;
     rootSigDesc.NumStaticSamplers = 1;
     rootSigDesc.pStaticSamplers = &sampler;
@@ -136,6 +158,7 @@ bool RenderingSystem::CreateLightingResources()
         {
             OutputDebugStringA((char*)errorBlob->GetBufferPointer());
         }
+        OutputDebugStringA("Failed to serialize lighting root signature\n");
         return false;
     }
 
@@ -144,6 +167,7 @@ bool RenderingSystem::CreateLightingResources()
                                      IID_PPV_ARGS(&mLightingRootSignature));
     if (FAILED(hr))
     {
+        OutputDebugStringA("Failed to create lighting root signature\n");
         return false;
     }
 
@@ -153,6 +177,7 @@ bool RenderingSystem::CreateLightingResources()
     psoDesc.VS = { vsLighting->GetBufferPointer(), vsLighting->GetBufferSize() };
     psoDesc.PS = { psLighting->GetBufferPointer(), psLighting->GetBufferSize() };
     psoDesc.pRootSignature = mLightingRootSignature.Get();
+    psoDesc.InputLayout = { nullptr, 0 };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = mBackBufferFormat;
@@ -161,10 +186,20 @@ bool RenderingSystem::CreateLightingResources()
     psoDesc.SampleDesc.Quality = 0;
     psoDesc.SampleMask = UINT_MAX;
 
+    // Rasterizer state
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;  // Не отсекаем ничего для полноэкранного треугольника
+    psoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    psoDesc.RasterizerState.DepthBias = 0;
+    psoDesc.RasterizerState.DepthBiasClamp = 0.0f;
+    psoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;
     psoDesc.RasterizerState.DepthClipEnable = TRUE;
+    psoDesc.RasterizerState.MultisampleEnable = FALSE;
+    psoDesc.RasterizerState.AntialiasedLineEnable = FALSE;
+    psoDesc.RasterizerState.ForcedSampleCount = 0;
+    psoDesc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
 
+    // Blend state - аддитивное смешивание для накопления света
     psoDesc.BlendState.AlphaToCoverageEnable = FALSE;
     psoDesc.BlendState.IndependentBlendEnable = FALSE;
     psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
@@ -176,17 +211,38 @@ bool RenderingSystem::CreateLightingResources()
     psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
     psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
+    // Depth-stencil state - отключаем depth testing
     psoDesc.DepthStencilState.DepthEnable = FALSE;
-    psoDesc.InputLayout = { nullptr, 0 };
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
 
     hr = mDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mLightingPSO));
     if (FAILED(hr))
     {
         char msg[256];
-        sprintf_s(msg, "PSO create failed: 0x%08X", hr);
+        sprintf_s(msg, "Lighting PSO create failed: 0x%08X\n", hr);
         OutputDebugStringA(msg);
+
+        // Дополнительная диагностика
+        switch (hr)
+        {
+            case E_INVALIDARG:
+                OutputDebugStringA("  Reason: E_INVALIDARG - One or more parameters are invalid\n");
+                break;
+            case E_OUTOFMEMORY:
+                OutputDebugStringA("  Reason: E_OUTOFMEMORY - Out of memory\n");
+                break;
+            case D3D12_ERROR_DRIVER_VERSION_MISMATCH:
+                OutputDebugStringA("  Reason: D3D12_ERROR_DRIVER_VERSION_MISMATCH - Driver version mismatch\n");
+                break;
+            case D3D12_ERROR_ADAPTER_NOT_FOUND:
+                OutputDebugStringA("  Reason: D3D12_ERROR_ADAPTER_NOT_FOUND - Adapter not found\n");
+                break;
+        }
+
         return false;
     }
+
+    OutputDebugStringA("Lighting PSO created successfully\n");
 
     mLightingCB = std::make_unique<UploadBuffer<LightConstants>>(
         mDevice,
@@ -220,8 +276,7 @@ void RenderingSystem::GeometryPass(
     mCommandList->Reset(mCommandAllocator, pso);
 
     // Переводим G-буфер текстуры в состояние RENDER_TARGET
-    D3D12_RESOURCE_BARRIER barriers[GBuffer::GBUFFER_COUNT + 1];
-
+    D3D12_RESOURCE_BARRIER barriers[GBuffer::GBUFFER_COUNT];
     for (int i = 0; i < GBuffer::GBUFFER_COUNT; ++i)
     {
         barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -229,32 +284,32 @@ void RenderingSystem::GeometryPass(
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
+    mCommandList->ResourceBarrier(GBuffer::GBUFFER_COUNT, barriers);
 
     // Переводим depth buffer в состояние DEPTH_WRITE
-    barriers[GBuffer::GBUFFER_COUNT] = CD3DX12_RESOURCE_BARRIER::Transition(
+    D3D12_RESOURCE_BARRIER depthBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         depthStencilBuffer,
         D3D12_RESOURCE_STATE_DEPTH_READ,
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    mCommandList->ResourceBarrier(1, &depthBarrier);
 
-    mCommandList->ResourceBarrier(GBuffer::GBUFFER_COUNT + 1, barriers);
-
-    // Очищаем G-буфер
-    mGBuffer->ClearRenderTargets(mCommandList);
-
-    // Очищаем depth buffer
+    // Очищаем G-буфер (только Albedo и Normal)
+    mGBuffer->ClearRenderTargets(mCommandList);   // очистит Albedo, Normal, Depth
     mCommandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    // Устанавливаем render targets G-буфера
-    mGBuffer->SetRenderTargets(mCommandList, mGBuffer->mRtvHeap.Get(), dsvHandle);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[3] = {
+        mGBuffer->GetRTV(GBuffer::GBUFFER_ALBEDO),
+        mGBuffer->GetRTV(GBuffer::GBUFFER_NORMAL),
+        mGBuffer->GetRTV(GBuffer::GBUFFER_DEPTH)
+    };
+    mCommandList->OMSetRenderTargets(3, rtvHandles, false, &dsvHandle);
 
+    // Viewport, scissor, root signature, descriptor heap
     mCommandList->RSSetViewports(1, &viewport);
     mCommandList->RSSetScissorRects(1, &scissorRect);
-
     mCommandList->SetGraphicsRootSignature(rootSignature);
-
     ID3D12DescriptorHeap* heaps[] = { cbvSrvHeap };
     mCommandList->SetDescriptorHeaps(1, heaps);
-
     mCommandList->SetGraphicsRootDescriptorTable(0, cbvSrvHeap->GetGPUDescriptorHandleForHeapStart());
 
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -275,22 +330,25 @@ void RenderingSystem::GeometryPass(
 
         if (!mat) continue;
 
+        // Root Parameter 1: SRV for main texture
         D3D12_GPU_DESCRIPTOR_HANDLE srvHandle1 =
             cbvSrvHeap->GetGPUDescriptorHandleForHeapStart();
         srvHandle1.ptr += (1 + mat->SrvHeapIndex) * cbvSrvDescriptorSize;
         mCommandList->SetGraphicsRootDescriptorTable(1, srvHandle1);
 
+        // Root Parameter 2: SRV for secondary texture
         D3D12_GPU_DESCRIPTOR_HANDLE srvHandle2 =
             cbvSrvHeap->GetGPUDescriptorHandleForHeapStart();
         srvHandle2.ptr += (1 + materialCount) * cbvSrvDescriptorSize;
 
+        // Проверяем, нужно ли использовать secondary texture
         bool isFloor = (mat->Name.find("floor") != std::string::npos);
         mCommandList->SetGraphicsRootDescriptorTable(2, isFloor ? srvHandle2 : srvHandle1);
 
         mCommandList->DrawIndexedInstanced(sm.IndexCount, 1, sm.IndexStart, 0, 0);
     }
 
-    // Переводим G-буфер текстуры в состояние PIXEL_SHADER_RESOURCE для прохода освещения
+    // Переводим G-буфер текстуры обратно в PIXEL_SHADER_RESOURCE
     for (int i = 0; i < GBuffer::GBUFFER_COUNT; ++i)
     {
         barriers[i] = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -298,14 +356,14 @@ void RenderingSystem::GeometryPass(
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
+    mCommandList->ResourceBarrier(GBuffer::GBUFFER_COUNT, barriers);
 
-    // Переводим depth buffer в состояние DEPTH_READ
-    barriers[GBuffer::GBUFFER_COUNT] = CD3DX12_RESOURCE_BARRIER::Transition(
+    // Переводим depth buffer обратно в DEPTH_READ
+    depthBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
         depthStencilBuffer,
         D3D12_RESOURCE_STATE_DEPTH_WRITE,
         D3D12_RESOURCE_STATE_DEPTH_READ);
-
-    mCommandList->ResourceBarrier(GBuffer::GBUFFER_COUNT + 1, barriers);
+    mCommandList->ResourceBarrier(1, &depthBarrier);
 
     mCommandList->Close();
 
@@ -325,6 +383,7 @@ void RenderingSystem::LightingPass(
     ID3D12PipelineState* lightingPSO,
     ID3D12RootSignature* lightingRootSignature,
     UploadBuffer<LightConstants>* lightingCB,
+    UploadBuffer<CameraConstants>* cameraCB,
     GBuffer* gBuffer)
 {
     mCommandAllocator->Reset();
@@ -349,21 +408,40 @@ void RenderingSystem::LightingPass(
     mCommandList->SetDescriptorHeaps(1, heaps);
     mCommandList->SetGraphicsRootDescriptorTable(0, gBuffer->mSrvHeap->GetGPUDescriptorHandleForHeapStart());
 
+    D3D12_GPU_VIRTUAL_ADDRESS cameraAddr = cameraCB->Resource()->GetGPUVirtualAddress();
+    mCommandList->SetGraphicsRootConstantBufferView(2, cameraAddr);
+
     D3D12_GPU_VIRTUAL_ADDRESS baseAddr = lightingCB->Resource()->GetGPUVirtualAddress();
     UINT elementSize = lightingCB->GetElementSize();
 
-    for (size_t i = 0; i < lights.size(); ++i)
+    if (cameraCB)
     {
-        LightConstants lightConstants;
-        lightConstants.SetFromLight(lights[i], cameraPos);
+        D3D12_GPU_VIRTUAL_ADDRESS cameraAddr = cameraCB->Resource()->GetGPUVirtualAddress();
+        mCommandList->SetGraphicsRootConstantBufferView(2, cameraAddr);
+    }
 
-        lightingCB->CopyData((UINT)i, lightConstants);
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mCommandList->IASetVertexBuffers(0, 0, nullptr);  // Нет вершинных буферов
+    mCommandList->IASetIndexBuffer(nullptr);
 
-        D3D12_GPU_VIRTUAL_ADDRESS cbAddr = baseAddr + i * elementSize;
-        mCommandList->SetGraphicsRootConstantBufferView(1, cbAddr);
+    if (lightingCB)
+    {
+        D3D12_GPU_VIRTUAL_ADDRESS baseAddr = lightingCB->Resource()->GetGPUVirtualAddress();
+        UINT elementSize = lightingCB->GetElementSize();
 
-        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        mCommandList->DrawInstanced(3, 1, 0, 0);
+        for (size_t i = 0; i < lights.size(); ++i)
+        {
+            LightConstants lightConstants;
+            lightConstants.SetFromLight(lights[i], cameraPos);
+            lightingCB->CopyData((UINT)i, lightConstants);
+
+            // Root Parameter 1: CBV для текущего света (b0)
+            D3D12_GPU_VIRTUAL_ADDRESS cbAddr = baseAddr + i * elementSize;
+            mCommandList->SetGraphicsRootConstantBufferView(1, cbAddr);
+
+            // Рисуем полноэкранный треугольник (3 вершины)
+            mCommandList->DrawInstanced(3, 1, 0, 0);
+        }
     }
 
     barrier = CD3DX12_RESOURCE_BARRIER::Transition(
