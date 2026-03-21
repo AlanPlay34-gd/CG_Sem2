@@ -417,13 +417,6 @@ void DirectXApp::Shutdown() {
     // Освобождаем constant buffers
     mObjectCB.reset();
 
-
-    FlushCommandQueue();
-
-    // Освобождаем PSO
-    mPSO.Reset();
-    mRootSignature.Reset();
-
     for (int i = 0; i < SwapChainBufferCount; i++) {
         mSwapChainBuffer[i].Reset();
     }
@@ -1109,27 +1102,7 @@ void DirectXApp::Update(const Timer& gt)
     mObjectCB->CopyData(0, objConstants);
 
     // ===== ОБНОВЛЕНИЕ ПАРАМЕТРОВ ОСВЕЩЕНИЯ =====
-    if (mRenderingSystem)
-    {
-        LightConstants lightConstants;  // Используем новую структуру
 
-        // Вращающийся источник света (для демонстрации)
-        static float lightAngle = 0.0f;
-        lightAngle += gt.DeltaTime() * 0.5f;
-
-        // Для точечного источника
-        lightConstants.LightPos = XMFLOAT3(
-            sinf(lightAngle) * 10.0f,
-            5.0f,
-            cosf(lightAngle) * 10.0f
-        );
-        lightConstants.LightIntensity = 1.5f;
-        lightConstants.LightColor = XMFLOAT3(1.0f, 1.0f, 1.0f);
-        lightConstants.LightRange = 20.0f;
-        lightConstants.LightType = LIGHT_POINT;  // Важно!
-        lightConstants.CameraPos = mEyePos;
-
-    }
 }
 
 void DirectXApp::Draw(const Timer& gt)

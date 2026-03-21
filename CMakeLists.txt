@@ -34,7 +34,4 @@ add_executable(CG_Sem2
         src/RenderingSystem.cpp
         h/RenderingSystem.h
         h/CameraConstants.h
-        h/CameraConstants.h
-        h/CameraConstants.h
-        h/CameraConstants.h
 )
