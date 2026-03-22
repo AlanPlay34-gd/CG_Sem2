@@ -48,6 +48,7 @@ public:
     bool IsPaused() const { return mAppPaused; }
     Timer& GetTimer() { return mTimer; }
 
+
     // Mouse methods
     virtual void OnMouseDown(WPARAM btnState, int x, int y);
     virtual void OnMouseUp(WPARAM btnState, int x, int y);
@@ -64,9 +65,21 @@ public:
 
 private:
 
+    int mFallingLightsCount = 0;
+    int mGroundLightsCount = 0;
+
     std::vector<Light> mLights;
     std::unique_ptr<RenderingSystem> mRenderingSystem;
     std::unique_ptr<UploadBuffer<LightConstants>> mLightingCB;
+
+    // Падающие источники света
+    std::vector<Light> mFallingLights;
+    float mSpawnTimer = 0.0f;
+    float mSpawnInterval = 0.02f;
+    int mMaxGroundLights = 1000;
+
+    void UpdateFallingLights(float dt);
+    void SpawnFallingLight();
 
     Microsoft::WRL::ComPtr<ID3D12Resource> mSecondaryTexture;
     float mChessTileSize = 0.5f;

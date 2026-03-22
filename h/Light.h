@@ -9,7 +9,8 @@ enum LightType
     LIGHT_AMBIENT = 0,
     LIGHT_DIRECTIONAL = 1,
     LIGHT_POINT = 2,
-    LIGHT_SPOT = 3
+    LIGHT_SPOT = 3,
+    LIGHT_FALLING = 4,
 };
 
 struct Light
@@ -33,6 +34,12 @@ struct Light
 
     // Для ambient
     XMFLOAT3 AmbientColor = XMFLOAT3(0.2f, 0.2f, 0.2f);
+
+    // Для falling balls
+    XMFLOAT3 Velocity = XMFLOAT3(0, 0, 0);
+    float Gravity = 9.8f;
+    float FloorY = -7.0f;
+    bool OnGround = false;
 
     Light() = default;
 
@@ -77,6 +84,42 @@ struct Light
         light.Range = range;
         light.SpotAngle = angle;
         return light;
+    }
+
+    static Light CreateFallingLight(const XMFLOAT3& pos, const XMFLOAT3& color,
+                                     float intensity, float range)
+    {
+        Light light;
+        light.Type = LIGHT_FALLING;
+        light.Position = pos;
+        light.Color = color;
+        light.Intensity = intensity;
+        light.Range = range;
+        light.Velocity = XMFLOAT3(0, 0, 0);
+        light.Gravity = 9.8f;
+        light.FloorY = -5.0f;
+        light.OnGround = false;
+        return light;
+    }
+
+    void Update(float dt)
+    {
+        if (Type != LIGHT_FALLING) return;
+
+        if (!OnGround)
+        {
+            // Падение
+            Velocity.y -= Gravity * dt;
+            Position.y += Velocity.y * dt;
+
+            // Проверка столкновения с полом
+            if (Position.y <= FloorY)
+            {
+                Position.y = FloorY;
+                OnGround = true;
+                Velocity = XMFLOAT3(0, 0, 0);
+            }
+        }
     }
 };
 

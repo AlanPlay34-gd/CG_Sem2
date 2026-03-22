@@ -10,10 +10,20 @@
 #include "../h/TgaLoader.h"
 #include "../h/d3dUtil.h"
 #include "../h/GBuffer.h"
+#include <random>
+#include <algorithm>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+
+static std::random_device rd;
+static std::mt19937 gen(rd());
+static std::uniform_real_distribution<float> colorDist(0.3f, 1.0f);
+static std::uniform_real_distribution<float> rangeDist(3.0f, 8.0f);
+static std::uniform_real_distribution<float> intensityDist(0.5f, 2.0f);
+static std::uniform_real_distribution<float> xDist(-8.6f, 8.6f);   // Диапазон по X
+static std::uniform_real_distribution<float> zDist(-2.0f, 2.0f);   // Диапазон по Z
 
 using namespace DirectX;
 
@@ -845,13 +855,6 @@ bool DirectXApp::Initialize() {
         60.0f,
         XM_PIDIV2));
 
-    // 4. Point light 1
-    mLights.push_back(Light::CreatePointLight(
-        DirectX::XMFLOAT3(5.0f, 3.0f, 0.0f),
-        DirectX::XMFLOAT3(0.3f, 1.0f, 0.3f),
-        3.0f,
-        5.0f));
-
     // 5. Directional light
     mLights.push_back(Light::CreateDirectionalLight(
         DirectX::XMFLOAT3(0.5f, -1.0f, 0.3f),
@@ -940,6 +943,22 @@ void DirectXApp::OnKeyDown(WPARAM wParam)
         sprintf_s(buf, "Chessboard mode: %s\n", mChessboardMode ? "ON" : "OFF");
         OutputDebugStringA(buf);
     }
+    // Управление падающими источниками
+    if (wParam == 'F')  // Увеличить интервал спавна
+    {
+        mSpawnInterval += 0.1f;
+        char buf[100];
+        sprintf_s(buf, "Spawn interval: %.1f sec\n", mSpawnInterval);
+        OutputDebugStringA(buf);
+    }
+    if (wParam == 'G')  // Уменьшить интервал спавна
+    {
+        mSpawnInterval = max(0.02f, mSpawnInterval - 0.1f);
+        char buf[100];
+        sprintf_s(buf, "Spawn interval: %.1f sec\n", mSpawnInterval);
+        OutputDebugStringA(buf);
+    }
+
 }
 
 int DirectXApp::Run() {
@@ -974,10 +993,19 @@ void DirectXApp::CalculateFrameStats() {
         float fps = (float)mFrameCount;
         float mspf = 1000.0f / fps;
 
-        std::wstring windowText = mMainWndCaption;
+        // Подсчитываем сколько источников на полу
+        mGroundLightsCount = 0;
+        for (const auto& light : mFallingLights)
+        {
+            if (light.OnGround) mGroundLightsCount++;
+        }
+        mFallingLightsCount = (int)mFallingLights.size();
 
-        windowText += L" FPS: " + std::to_wstring(fps);
-        windowText += L" MSPF: " + std::to_wstring(mspf);
+        // Формируем строку с информацией
+        std::wstring windowText = mMainWndCaption;
+        windowText += L" | FPS: " + std::to_wstring((int)fps);
+        windowText += L" | On Ground: " + std::to_wstring(mGroundLightsCount);
+        windowText += L" / " + std::to_wstring(mMaxGroundLights);
 
         SetWindowText(window.GetHandle(), windowText.c_str());
 
@@ -1101,7 +1129,8 @@ void DirectXApp::Update(const Timer& gt)
 
     mObjectCB->CopyData(0, objConstants);
 
-    // ===== ОБНОВЛЕНИЕ ПАРАМЕТРОВ ОСВЕЩЕНИЯ =====
+    //----FallingUpdate----
+    UpdateFallingLights(dt);
 
 }
 
@@ -1124,10 +1153,16 @@ void DirectXApp::Draw(const Timer& gt)
         mScissorRect,
         (UINT)mMaterials.size(),
         mSecondaryTexture.Get());
+
+    std::vector<Light> allLights = mLights;
+    allLights.insert(allLights.end(),
+                     mFallingLights.begin(),
+                     mFallingLights.end());
+
     mRenderingSystem->LightingPass(
         CurrentBackBuffer(),
         CurrentBackBufferView(),
-        mLights,
+        allLights,
         mEyePos,
         mScreenViewport,
         mScissorRect,
@@ -1378,3 +1413,58 @@ void DirectXApp::CreateColorTexture(
 
     FlushCommandQueue();
 }
+//-----Falling Lights-----
+void DirectXApp::SpawnFallingLight()
+{
+    XMFLOAT3 spawnPos(xDist(gen), 8.0, zDist(gen));
+
+    XMFLOAT3 color(0.0f, 1.0f, 1.0f);
+
+    float intensity = 10.0f;  // Высокая интенсивность
+    float range = 1.0f;     // Большой радиус
+
+    Light fallingLight = Light::CreateFallingLight(spawnPos, color, intensity, range);
+    fallingLight.FloorY = -6.0f;
+    fallingLight.Gravity = 10.0f;
+
+    mFallingLights.push_back(fallingLight);
+}
+
+void DirectXApp::UpdateFallingLights(float dt)
+{
+    // Обновляем физику
+    for (auto& light : mFallingLights)
+    {
+        light.Update(dt);
+    }
+
+    // Подсчитываем количество на полу
+    int groundCount = 0;
+    for (const auto& light : mFallingLights)
+    {
+        if (light.OnGround) groundCount++;
+    }
+
+
+    // Если на полу >= 1000, удаляем самые старые
+    while (groundCount >= mMaxGroundLights)
+    {
+        auto it = std::find_if(mFallingLights.begin(), mFallingLights.end(),
+            [](const Light& l) { return l.OnGround; });
+        if (it != mFallingLights.end())
+        {
+            mFallingLights.erase(it);
+            groundCount--;
+        }
+        else break;
+    }
+
+    // Спавн новых
+    mSpawnTimer += dt;
+    while (mSpawnTimer >= mSpawnInterval)
+    {
+        SpawnFallingLight();
+        mSpawnTimer -= mSpawnInterval;
+    }
+}
+//------------------------

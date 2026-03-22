@@ -246,7 +246,7 @@ bool RenderingSystem::CreateLightingResources()
 
     mLightingCB = std::make_unique<UploadBuffer<LightConstants>>(
         mDevice,
-        10,  // Максимум источников
+        1100,  // Максимум источников
         true);
 
     return true;

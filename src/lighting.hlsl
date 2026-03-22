@@ -32,6 +32,7 @@ static const int LIGHT_AMBIENT = 0;
 static const int LIGHT_DIRECTIONAL = 1;
 static const int LIGHT_POINT = 2;
 static const int LIGHT_SPOT = 3;
+static const int LIGHT_FALLING = 4;
 
 struct VSInput
 {
@@ -127,6 +128,28 @@ float4 PS(PSInput pin) : SV_Target
             result = diff * gLightColor * gLightIntensity * albedo.rgb * attenuation * spotFactor;
         }
     }
+	if (gLightType == LIGHT_FALLING)
+{
+    float3 lightDir = gLightPos - worldPos;
+    float distance = length(lightDir);
+    lightDir = normalize(lightDir);
+
+    // Расстояние в процентах
+    float t = saturate(distance / gLightRange);
+
+    // Внешнее свечение
+    float outer = (1.0f - t) * (1.0f - t);
+
+    // ЯРКОЕ ЯДРО - экспоненциальное затухание
+    float core = exp(-distance * distance * 2.0f);  // Гауссово ядро
+    core = max(core, 0.0f);
+
+    float diff = max(dot(normal, lightDir), 0.0f);
+
+    // Комбинируем: ядро очень яркое, внешнее свечение слабее
+    result = diff * gLightColor * gLightIntensity * albedo.rgb * (core * 2.0f + outer * 0.5f);
+}
+
 
     return float4(result, 0.0f);
 }
