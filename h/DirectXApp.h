@@ -72,6 +72,7 @@ private:
     std::unique_ptr<RenderingSystem> mRenderingSystem;
     std::unique_ptr<UploadBuffer<LightConstants>> mLightingCB;
 
+    bool mFallingLightsEnabled = false;
     // Падающие источники света
     std::vector<Light> mFallingLights;
     float mSpawnTimer = 0.0f;

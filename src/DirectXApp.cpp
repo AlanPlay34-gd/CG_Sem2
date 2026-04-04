@@ -958,6 +958,21 @@ void DirectXApp::OnKeyDown(WPARAM wParam)
         sprintf_s(buf, "Spawn interval: %.1f sec\n", mSpawnInterval);
         OutputDebugStringA(buf);
     }
+    if (wParam == 'P') {
+        mFallingLightsEnabled = !mFallingLightsEnabled;
+
+        // Очищаем все падающие источники при выключении
+        if (!mFallingLightsEnabled) {
+            mFallingLights.clear();
+            mGroundLightsCount = 0;
+            mFallingLightsCount = 0;
+            mSpawnTimer = 0.0f;
+        }
+
+        char buf[100];
+        sprintf_s(buf, "Falling lights: %s\n", mFallingLightsEnabled ? "ON" : "OFF");
+        OutputDebugStringA(buf);
+    }
 
 }
 
@@ -1004,8 +1019,14 @@ void DirectXApp::CalculateFrameStats() {
         // Формируем строку с информацией
         std::wstring windowText = mMainWndCaption;
         windowText += L" | FPS: " + std::to_wstring((int)fps);
-        windowText += L" | On Ground: " + std::to_wstring(mGroundLightsCount);
-        windowText += L" / " + std::to_wstring(mMaxGroundLights);
+
+        // Показываем состояние падающих источников
+        if (mFallingLightsEnabled) {
+            windowText += L" | Falling: " + std::to_wstring(mFallingLightsCount);
+            windowText += L" (Ground: " + std::to_wstring(mGroundLightsCount) + L"/" + std::to_wstring(mMaxGroundLights) + L")";
+        } else {
+            windowText += L" | Falling: OFF (Press P to enable)";
+        }
 
         SetWindowText(window.GetHandle(), windowText.c_str());
 
@@ -1155,10 +1176,11 @@ void DirectXApp::Draw(const Timer& gt)
         mSecondaryTexture.Get());
 
     std::vector<Light> allLights = mLights;
-    allLights.insert(allLights.end(),
-                     mFallingLights.begin(),
-                     mFallingLights.end());
-
+    if (mFallingLightsEnabled) {
+        allLights.insert(allLights.end(),
+                         mFallingLights.begin(),
+                         mFallingLights.end());
+    }
     mRenderingSystem->LightingPass(
         CurrentBackBuffer(),
         CurrentBackBufferView(),
@@ -1432,6 +1454,10 @@ void DirectXApp::SpawnFallingLight()
 
 void DirectXApp::UpdateFallingLights(float dt)
 {
+    if (!mFallingLightsEnabled) {
+        return;
+    }
+
     // Обновляем физику
     for (auto& light : mFallingLights)
     {
