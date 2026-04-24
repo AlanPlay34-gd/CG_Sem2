@@ -8,7 +8,7 @@
 #include <string>
 #include "UploadBuffer.h"
 #include "Light.h"
-#include "Submesh.h"
+#include "h/mesh_data.h"
 #include "Material.h"
 #include "GBuffer.h"
 #include "CameraConstants.h"

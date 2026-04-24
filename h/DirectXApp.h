@@ -9,6 +9,11 @@
 #include <vector>
 #include <windows.h>
 #include <wrl/client.h>
+#include <unordered_map>
+#include <filesystem>
+
+#include "../h/model_loader.h"
+#include "../h/mesh_data.h"
 #include "../h/ObjectConstants.h"
 #include "../h/Timer.h"
 #include "../h/CameraConstants.h"
@@ -18,10 +23,11 @@
 #include "Light.h"
 #include "Material.h"
 #include "MathHelper.h"
-#include "Submesh.h"
 #include "ThrowIfFailed.h"
 #include "Window.h"
 #include "GBuffer.h"
+#include "DDSTextureLoader.h"
+#include "Texture.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -223,4 +229,23 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const {
         return mDsvHeap->GetCPUDescriptorHandleForHeapStart();
     }
+
+    // Загрузка текстур
+    void loadTextures();
+    void createDefaultTextures();
+    void buildCbvSrvHeap();
+    void bindMaterialsToTextures();
+
+    // Хранилище текстур
+    std::unordered_map<std::wstring, std::unique_ptr<Texture>> mTextures;
+    // Текстуры-заглушки
+    ComPtr<ID3D12Resource> mDefaultDiffuseTex;
+    ComPtr<ID3D12Resource> mDefaultNormalTex;
+    ComPtr<ID3D12Resource> mDefaultDisplacementTex;
+    ComPtr<ID3D12Resource> mDefaultDiffuseTexUpload;
+    ComPtr<ID3D12Resource> mDefaultNormalTexUpload;
+    ComPtr<ID3D12Resource> mDefaultDisplacementTexUpload;
+
+    // Вспомогательные переменные для кучи дескрипторов
+    UINT mCbvSrvDescriptorSize;
 };
