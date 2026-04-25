@@ -15,6 +15,9 @@
 #include <cctype>
 #include <filesystem>
 #include <limits>
+#include <random>
+#include <sstream>
+#include <iomanip>
 #include <stdexcept>
 #include <vector>
 
@@ -706,7 +709,7 @@ void DirectXApp::CreateFallbackTextures() {
 void DirectXApp::BuildConstantBuffers() {
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(mDevice.Get(), 1, true);
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(mDevice.Get(), 1, true);
-    mLightingCB = std::make_unique<UploadBuffer<LightingConstants>>(mDevice.Get(), 1, true);
+    mLightingCB = std::make_unique<UploadBuffer<LightingConstants>>(mDevice.Get(), LightingCbElementCount, true);
 }
 
 void DirectXApp::BuildMainSrvHeap() {
@@ -800,9 +803,9 @@ void DirectXApp::BuildLights() {
 
     LightData dir;
     dir.Type = static_cast<unsigned int>(LightType::Directional);
-    dir.Direction = XMFLOAT3(-0.35f, -1.0f, 0.15f);
-    dir.Color = XMFLOAT3(1.0f, 0.95f, 0.85f);
-    dir.Intensity = 1.25f;
+    dir.Direction = XMFLOAT3(-0.25f, -1.0f, 0.35f);
+    dir.Color = XMFLOAT3(1.0f, 0.97f, 0.92f);
+    dir.Intensity = 1.1f;
     mLights.push_back(dir);
 
     auto addPoint = [&](const XMFLOAT3& pos, const XMFLOAT3& color, float intensity, float range) {
@@ -815,11 +818,9 @@ void DirectXApp::BuildLights() {
         mLights.push_back(point);
     };
 
-    // Colored point lights around the planet.
-    addPoint(XMFLOAT3(2.8f, 1.8f, 0.0f),   XMFLOAT3(1.0f, 0.3f, 0.3f),  10.0f, 18.0f); // red
-    addPoint(XMFLOAT3(-2.8f, 1.8f, 0.0f),  XMFLOAT3(0.3f, 0.8f, 1.0f),  10.0f, 18.0f); // cyan
-    addPoint(XMFLOAT3(0.0f, 2.4f, 2.8f),   XMFLOAT3(0.35f, 1.0f, 0.45f), 9.0f, 18.0f); // green
-    addPoint(XMFLOAT3(0.0f, 1.0f, -3.2f),  XMFLOAT3(0.95f, 0.5f, 1.0f),  8.0f, 18.0f); // magenta
+    addPoint(XMFLOAT3(-10.0f, 5.0f, -2.0f), XMFLOAT3(1.0f, 0.35f, 0.35f), 5.5f, 26.0f);
+    addPoint(XMFLOAT3(9.0f, 6.0f, 7.0f), XMFLOAT3(0.3f, 0.55f, 1.0f), 4.8f, 24.0f);
+    addPoint(XMFLOAT3(0.0f, 10.0f, -11.0f), XMFLOAT3(0.45f, 1.0f, 0.45f), 3.8f, 28.0f);
 
     auto addSpot = [&](const XMFLOAT3& pos, const XMFLOAT3& dirVec, const XMFLOAT3& color, float intensity, float range, float angle) {
         LightData spot;
@@ -833,12 +834,63 @@ void DirectXApp::BuildLights() {
         mLights.push_back(spot);
     };
 
-    addSpot(XMFLOAT3(0.0f, 4.0f, -2.5f), XMFLOAT3(0.0f, -1.0f, 0.35f), XMFLOAT3(1.0f, 0.95f, 0.8f), 16.0f, 24.0f, 0.62f);
-    addSpot(XMFLOAT3(-3.5f, 2.5f, -1.5f), XMFLOAT3(0.9f, -0.3f, 0.2f), XMFLOAT3(0.6f, 0.75f, 1.0f), 12.0f, 20.0f, 0.58f);
+    addSpot(XMFLOAT3(13.0f, 9.0f, 0.0f), XMFLOAT3(-1.0f, -0.75f, 0.0f), XMFLOAT3(1.0f, 0.9f, 0.5f), 2.2f, 34.0f, 0.35f);
+    addSpot(XMFLOAT3(-13.0f, 8.0f, 3.0f), XMFLOAT3(1.0f, -0.85f, -0.15f), XMFLOAT3(0.4f, 1.0f, 0.9f), 2.0f, 30.0f, 0.32f);
+}
+
+void DirectXApp::UpdateFallingLights(float dt) {
+    if (!mFallingBallsEnabled) {
+        mFallingLights.clear();
+        return;
+    }
+
+    static std::mt19937 rng{1337u};
+    std::uniform_real_distribution<float> xzDist(-14.0f, 14.0f);
+    std::uniform_real_distribution<float> colorDist(0.4f, 1.0f);
+    std::uniform_real_distribution<float> speedDist(1.2f, 2.6f);
+    std::uniform_real_distribution<float> rangeDist(6.0f, 12.0f);
+
+    mFallingSpawnTimer += dt;
+    while (mFallingSpawnTimer >= mFallingSpawnInterval && mFallingLights.size() < mMaxFallingLights) {
+        mFallingSpawnTimer -= mFallingSpawnInterval;
+
+        FallingLight light;
+        light.position = XMFLOAT3(xzDist(rng), 12.0f + speedDist(rng) * 2.0f, xzDist(rng));
+        light.velocity = XMFLOAT3(0.0f, -(3.5f + speedDist(rng)), 0.0f);
+        light.color = XMFLOAT3(colorDist(rng), colorDist(rng), colorDist(rng));
+        light.intensity = 6.5f + speedDist(rng) * 2.0f;
+        light.range = rangeDist(rng);
+        light.settled = false;
+        mFallingLights.push_back(light);
+    }
+
+    constexpr float kGroundY = -0.02f;
+    constexpr float kGravity = 8.5f;
+
+    for (auto& light : mFallingLights) {
+        if (!light.settled) {
+            light.velocity.y -= kGravity * dt;
+            light.position.y += light.velocity.y * dt;
+            if (light.position.y <= kGroundY) {
+                light.position.y = kGroundY;
+                light.velocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+                light.settled = true;
+            }
+        } else {
+            light.intensity -= 1.2f * dt;
+            light.range -= 0.7f * dt;
+        }
+    }
+
+    mFallingLights.erase(
+        std::remove_if(mFallingLights.begin(), mFallingLights.end(), [](const FallingLight& light) {
+            return light.intensity <= 0.2f || light.range <= 0.8f;
+        }),
+        mFallingLights.end());
 }
 
 void DirectXApp::UpdateCamera(float dt) {
-    const float moveSpeed = 25.0f;
+    const float moveSpeed = 5.f;
 
     const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
         std::cos(mPitch) * std::sin(mYaw),
@@ -873,6 +925,10 @@ void DirectXApp::Update(const GameTimer& gt) {
     const bool f1Down = (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
     const bool f2Down = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
     const bool f3Down = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+    const bool bDown = (GetAsyncKeyState('B') & 0x8000) != 0;
+    const bool tDown = (GetAsyncKeyState('T') & 0x8000) != 0;
+    const bool rDown = (GetAsyncKeyState('R') & 0x8000) != 0;
+    bool titleDirty = false;
 
     if (f1Down && !mF1WasDown) {
         mDebugViewMode = 1;
@@ -882,11 +938,97 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
     if (f3Down && !mF3WasDown) {
         mDebugViewMode = 3;
+        titleDirty = true;
     }
 
     mF1WasDown = f1Down;
     mF2WasDown = f2Down;
     mF3WasDown = f3Down;
+
+    if (bDown && !mBWasDown) {
+        mFallingBallsEnabled = !mFallingBallsEnabled;
+        if (!mFallingBallsEnabled) {
+            mFallingLights.clear();
+        }
+        titleDirty = true;
+    }
+    mBWasDown = bDown;
+
+    if (tDown && !mTWasDown) {
+        mAnimateTextures = !mAnimateTextures;
+        titleDirty = true;
+    }
+    mTWasDown = tDown;
+
+    if (rDown && !mRWasDown) {
+        mAnimateTextures = false;
+        mTexAnimU = 0.0f;
+        mTexAnimV = 0.0f;
+        mTexScaleU = 1.0f;
+        mTexScaleV = 1.0f;
+        titleDirty = true;
+    }
+    mRWasDown = rDown;
+
+    auto clampTiling = [](float v) {
+        return std::clamp(v, 0.10f, 16.0f);
+    };
+
+    const float tileRate = 1.2f; // units per second
+    float deltaU = 0.0f;
+    float deltaV = 0.0f;
+
+    if (GetAsyncKeyState('Y') & 0x8000) {
+        deltaU += tileRate * gt.DeltaTime();
+        deltaV += tileRate * gt.DeltaTime();
+    }
+    if (GetAsyncKeyState('H') & 0x8000) {
+        deltaU -= tileRate * gt.DeltaTime();
+        deltaV -= tileRate * gt.DeltaTime();
+    }
+    if (GetAsyncKeyState('U') & 0x8000) {
+        deltaU += tileRate * gt.DeltaTime();
+    }
+    if (GetAsyncKeyState('J') & 0x8000) {
+        deltaU -= tileRate * gt.DeltaTime();
+    }
+    if (GetAsyncKeyState('I') & 0x8000) {
+        deltaV += tileRate * gt.DeltaTime();
+    }
+    if (GetAsyncKeyState('K') & 0x8000) {
+        deltaV -= tileRate * gt.DeltaTime();
+    }
+
+    if (std::abs(deltaU) > 0.0f || std::abs(deltaV) > 0.0f) {
+        mTexScaleU = clampTiling(mTexScaleU + deltaU);
+        mTexScaleV = clampTiling(mTexScaleV + deltaV);
+        titleDirty = true;
+    }
+
+    if (mDebugViewMode != mLastTitleMode) {
+        titleDirty = true;
+    }
+
+    if (titleDirty) {
+        std::wostringstream ws;
+        ws << L"DirectX 12 Framework";
+        if (mDebugViewMode == 2) {
+            ws << L" | F2: Normal Debug";
+        } else if (mDebugViewMode == 3) {
+            ws << L" | F3: Tess Debug + Wireframe";
+        } else {
+            ws << L" | F1: Default";
+        }
+
+        ws << L" | B: Falling Lights " << (mFallingBallsEnabled ? L"ON" : L"OFF");
+        ws << L" | T: Texture Anim " << (mAnimateTextures ? L"ON" : L"OFF");
+        ws << std::fixed << std::setprecision(2);
+        ws << L" | TileU=" << mTexScaleU << L" TileV=" << mTexScaleV;
+        SetWindowTextW(mHwnd, ws.str().c_str());
+        mLastTitleMode = mDebugViewMode;
+    }
+
+    UpdateFallingLights(gt.DeltaTime());
 
     const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
         std::cos(mPitch) * std::sin(mYaw),
@@ -903,7 +1045,19 @@ void DirectXApp::Update(const GameTimer& gt) {
                                                    0.1f,
                                                    5000.0f);
     const XMMATRIX world = XMMatrixIdentity();
-    const XMMATRIX texTransform = XMMatrixIdentity();
+    if (mAnimateTextures) {
+        mTexAnimU += 0.04f * gt.DeltaTime();
+        mTexAnimV += 0.015f * gt.DeltaTime();
+        if (mTexAnimU > 1.0f) {
+            mTexAnimU -= 1.0f;
+        }
+        if (mTexAnimV > 1.0f) {
+            mTexAnimV -= 1.0f;
+        }
+    }
+    const XMMATRIX texTransform =
+        XMMatrixScaling(mTexScaleU, mTexScaleV, 1.0f) *
+        XMMatrixTranslation(mTexAnimU, mTexAnimV, 0.0f);
 
     ObjectConstants obj = {};
     XMStoreFloat4x4(&obj.World, XMMatrixTranspose(world));
@@ -911,8 +1065,8 @@ void DirectXApp::Update(const GameTimer& gt) {
     XMStoreFloat4x4(&obj.TextureTransform, XMMatrixTranspose(texTransform));
     obj.TotalTime = gt.TotalTime();
     obj.Padding.x = static_cast<float>(mDebugViewMode);
-    obj.Padding.y = (mDebugViewMode == 3) ? 8.0f : 1.6f;   // displacement strength
-    obj.Padding.z = (mDebugViewMode == 3) ? 24.0f : 0.0f;  // tessellation override
+    obj.Padding.y = 0.20f;
+    obj.Padding.z = 0.0f;
     mObjectCB->CopyData(0, obj);
 
     PassConstants pass = {};
@@ -921,13 +1075,6 @@ void DirectXApp::Update(const GameTimer& gt) {
     pass.EyePosW = mEyePos;
     pass.AmbientColor = XMFLOAT4(0.08f, 0.08f, 0.1f, 1.0f);
     mPassCB->CopyData(0, pass);
-
-    LightingConstants lighting = {};
-    lighting.LightCount = (std::min)(static_cast<unsigned int>(mLights.size()), kMaxLights);
-    for (unsigned int i = 0; i < lighting.LightCount; ++i) {
-        lighting.Lights[i] = mLights[i];
-    }
-    mLightingCB->CopyData(0, lighting);
 }
 
 void DirectXApp::Draw(const GameTimer&) {
@@ -935,6 +1082,7 @@ void DirectXApp::Draw(const GameTimer&) {
         OutputDebugStringA("Draw skipped: mesh is empty.\n");
         return;
     }
+    FlushCommandQueue();
 
     ThrowIfFailed(mDirectCmdListAlloc->Reset(), "Reset command allocator failed");
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr), "Reset command list failed");
@@ -980,12 +1128,17 @@ void DirectXApp::Draw(const GameTimer&) {
         const bool hasDisplacement = !submesh.material.displacementTextureName.empty() &&
                                      submesh.material.displacementSrvHeapIndex !=
                                          mTextureResources[mFallbackDisplacementIndex].srvHeapIndex;
+        const bool wireframeDebug = (mDebugViewMode == 3);
 
         if (hasDisplacement) {
-            mCommandList->SetPipelineState(mRenderingSystem->GetTessellationPSO());
+            mCommandList->SetPipelineState(wireframeDebug
+                                               ? mRenderingSystem->GetTessellationWirePSO()
+                                               : mRenderingSystem->GetTessellationPSO());
             mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
         } else {
-            mCommandList->SetPipelineState(mRenderingSystem->GetGeometryPSO());
+            mCommandList->SetPipelineState(wireframeDebug
+                                               ? mRenderingSystem->GetGeometryWirePSO()
+                                               : mRenderingSystem->GetGeometryPSO());
             mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         }
 
@@ -1028,24 +1181,50 @@ void DirectXApp::Draw(const GameTimer&) {
     mCommandList->SetGraphicsRootDescriptorTable(0, GetGpuSrvHandle(mGBufferSrvStart));
     mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
 
-    // Deferred lighting layers with additive blending:
-    // 1) ambient only
-    // 2) one fullscreen pass per light (directional / point / spot)
-    LightingConstants lightingLayer = {};
-    lightingLayer.LightCount = 0;
-    lightingLayer.EnableAmbient = 1;
-    mLightingCB->CopyData(0, lightingLayer);
-    mCommandList->SetGraphicsRootConstantBufferView(2, mLightingCB->Resource()->GetGPUVirtualAddress());
+    const unsigned int lightElementSize = mLightingCB->GetElementSize();
+    unsigned int lightCbIndex = 0;
+    const auto lightingCbAddress = [&](unsigned int index) -> D3D12_GPU_VIRTUAL_ADDRESS {
+        return mLightingCB->Resource()->GetGPUVirtualAddress() + static_cast<UINT64>(index) * lightElementSize;
+    };
+
+    // Deferred lighting layers with additive blending: ambient + one draw per light.
+    LightingConstants ambientConst = {};
+    ambientConst.EnableAmbient = 1;
+    mLightingCB->CopyData(static_cast<int>(lightCbIndex), ambientConst);
+    mCommandList->SetGraphicsRootConstantBufferView(2, lightingCbAddress(lightCbIndex));
     mCommandList->DrawInstanced(3, 1, 0, 0);
+    ++lightCbIndex;
 
     for (const auto& light : mLights) {
-        lightingLayer = {};
-        lightingLayer.LightCount = 1;
-        lightingLayer.EnableAmbient = 0;
-        lightingLayer.Lights[0] = light;
-        mLightingCB->CopyData(0, lightingLayer);
-        mCommandList->SetGraphicsRootConstantBufferView(2, mLightingCB->Resource()->GetGPUVirtualAddress());
+        if (lightCbIndex >= LightingCbElementCount) {
+            break;
+        }
+
+        LightingConstants lightConst = {};
+        lightConst.EnableAmbient = 0;
+        lightConst.Light = light;
+        mLightingCB->CopyData(static_cast<int>(lightCbIndex), lightConst);
+        mCommandList->SetGraphicsRootConstantBufferView(2, lightingCbAddress(lightCbIndex));
         mCommandList->DrawInstanced(3, 1, 0, 0);
+        ++lightCbIndex;
+    }
+
+    for (const auto& fl : mFallingLights) {
+        if (lightCbIndex >= LightingCbElementCount) {
+            break;
+        }
+
+        LightingConstants lightConst = {};
+        lightConst.EnableAmbient = 0;
+        lightConst.Light.Type = static_cast<unsigned int>(LightType::Point);
+        lightConst.Light.Position = fl.position;
+        lightConst.Light.Color = fl.color;
+        lightConst.Light.Intensity = fl.intensity;
+        lightConst.Light.Range = fl.range;
+        mLightingCB->CopyData(static_cast<int>(lightCbIndex), lightConst);
+        mCommandList->SetGraphicsRootConstantBufferView(2, lightingCbAddress(lightCbIndex));
+        mCommandList->DrawInstanced(3, 1, 0, 0);
+        ++lightCbIndex;
     }
 
     auto bbToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
@@ -1065,7 +1244,7 @@ void DirectXApp::Draw(const GameTimer&) {
     FlushCommandQueue();
 }
 
-LRESULT DirectXApp::MsgProc(HWND, UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT DirectXApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_RBUTTONDOWN:
         mLastMousePos.x = GET_X_LPARAM(lParam);
@@ -1098,7 +1277,7 @@ LRESULT DirectXApp::MsgProc(HWND, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     default:
-        return DefWindowProc(mHwnd, msg, wParam, lParam);
+        return DefWindowProc(hwnd, msg, wParam, lParam);
     }
 }
 

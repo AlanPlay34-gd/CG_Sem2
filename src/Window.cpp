@@ -1,175 +1,118 @@
 ﻿#include "../h/Window.h"
-#include <windowsx.h>
-#include "../h/DirectXApp.h"
 
-Window::Window(HINSTANCE hInstance, int nCmdShow)
-    : hInstance(hInstance), hWnd(nullptr), width(800), height(600) {
-    // Конструктор - инициализация полей
+#include "DirectXApp.h"
+#include "GameTimer.h"
+
+Window::Window(HINSTANCE instance, int showCmd)
+    : hInstance(instance), nCmdShow(showCmd) {
 }
 
 Window::~Window() {
-    if (hWnd) {
+    if (hWnd && IsWindow(hWnd)) {
         DestroyWindow(hWnd);
     }
+    hWnd = nullptr;
+    UnregisterClass(L"Lab3DX12WindowClass", hInstance);
 }
 
-bool Window::Initialize(const wchar_t* title, int width, int height) {
-    this->width = width;
-    this->height = height;
+bool Window::Initialize(const wchar_t* title, int clientWidth, int clientHeight) {
+    width = clientWidth;
+    height = clientHeight;
 
-    // 1. Регистрация класса окна
     WNDCLASSEX wc = {};
     wc.cbSize = sizeof(WNDCLASSEX);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
-    wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = L"DirectXWindowClass";
-    wc.hIconSm = wc.hIcon;
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    wc.lpszClassName = L"Lab3DX12WindowClass";
 
     if (!RegisterClassEx(&wc)) {
-        MessageBox(NULL, L"Failed to register window class", L"Error", MB_OK);
         return false;
     }
 
-    // 2. Рассчитываем размер с учетом рамок окна
-    RECT windowRect = { 0, 0, width, height };
+    RECT windowRect = {0, 0, width, height};
     AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW, FALSE);
 
-    // 3. Создание окна
     hWnd = CreateWindowEx(
-        WS_EX_APPWINDOW,
-        L"DirectXWindowClass",
+        0,
+        wc.lpszClassName,
         title,
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
         windowRect.right - windowRect.left,
         windowRect.bottom - windowRect.top,
         nullptr,
         nullptr,
         hInstance,
-        this  // Передаем this для доступа в WindowProc
-    );
+        this);
 
     if (!hWnd) {
-        MessageBox(NULL, L"Failed to create window", L"Error", MB_OK);
         return false;
     }
 
-    // 4. Сохраняем указатель на Window в данных окна
-    SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-
-    // 5. Показ окна
-    ShowWindow(hWnd, SW_SHOW);
+    ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
-
     return true;
 }
 
-LRESULT CALLBACK Window::WindowProc(HWND hWnd, UINT message,
-    WPARAM wParam, LPARAM lParam) {
+int Window::Run(DirectXApp& app, GameTimer& timer) {
+    mDirectXApp = &app;
+    timer.Reset();
 
-    // Получаем указатель на объект Window
-    Window* window = reinterpret_cast<Window*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
-
-    if (window) {
-        // Передаем сообщение в InputDevice
-        window->GetInputDevice().HandleMessage(hWnd, message, wParam, lParam);
+    MSG msg = {};
+    while (msg.message != WM_QUIT) {
+        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        } else {
+            if (!hWnd || !IsWindow(hWnd)) {
+                break;
+            }
+            timer.Tick();
+            app.Update(timer);
+            app.Draw(timer);
+        }
     }
 
-    switch (message) {
-    case WM_ACTIVATE:
-        if (LOWORD(wParam) == WA_INACTIVE) {
+    mDirectXApp = nullptr;
+    return static_cast<int>(msg.wParam);
+}
 
-            if (window && window->GetDirectXApp()) {
-                window->GetDirectXApp()->StopTimer();
-            }
-        }
-        else {
-            if (window && window->GetDirectXApp()) {
-                window->GetDirectXApp()->StartTimer();
-            }
-        }
-        return 0;
+LRESULT CALLBACK Window::WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    Window* window = nullptr;
 
-    case WM_ENTERSIZEMOVE:
-        if (window && window->GetDirectXApp()) {
-            window->GetDirectXApp()->StopTimer();
-        }
-        return 0;
+    if (message == WM_NCCREATE) {
+        const auto* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
+        window = reinterpret_cast<Window*>(cs->lpCreateParams);
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(window));
+    } else {
+        window = reinterpret_cast<Window*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+    }
 
-    case WM_EXITSIZEMOVE:
-        if (window && window->GetDirectXApp()) {
-            window->GetDirectXApp()->StartTimer();
-            // TODO: Вызвать OnResize() для пересоздания swap chain
-        }
+    if (message == WM_CLOSE) {
+        DestroyWindow(hWnd);
         return 0;
-    case WM_LBUTTONDOWN:
-    case WM_MBUTTONDOWN:
-    case WM_RBUTTONDOWN:
-        if (window && window->GetDirectXApp()) {
-            window->GetDirectXApp()->OnMouseDown(
-                wParam,
-                GET_X_LPARAM(lParam),
-                GET_Y_LPARAM(lParam));
-        }
-        return 0;
+    }
 
-    case WM_MOUSEMOVE:
-        if (window && window->GetDirectXApp()) {
-            window->GetDirectXApp()->OnMouseMove(
-                wParam,
-                GET_X_LPARAM(lParam),
-                GET_Y_LPARAM(lParam));
-        }
-        return 0;
-
-    case WM_LBUTTONUP:
-    case WM_MBUTTONUP:
-    case WM_RBUTTONUP:
-        if (window && window->GetDirectXApp()) {
-            window->GetDirectXApp()->OnMouseUp(
-                wParam,
-                GET_X_LPARAM(lParam),
-                GET_Y_LPARAM(lParam));
-        }
-        return 0;
-
-    case WM_DESTROY:
+    if (message == WM_DESTROY) {
         PostQuitMessage(0);
         return 0;
-
-    case WM_MENUCHAR:
-        // Don't beep when we alt-enter.
-        return MAKELRESULT(0, MNC_CLOSE);
-
-    case WM_GETMINMAXINFO:
-        ((MINMAXINFO*)lParam)->ptMinTrackSize.x = 200;
-        ((MINMAXINFO*)lParam)->ptMinTrackSize.y = 200;
-        return 0;
-
-    case WM_SIZE:
-        if (window) {
-            window->width = LOWORD(lParam);
-            window->height = HIWORD(lParam);
-            // TODO: Обработка изменения размера окна
-        }
-        break;
-
-    case WM_KEYDOWN:
-            if (wParam == VK_ESCAPE) {
-                DestroyWindow(hWnd);
-                return 0;
-            }
-            if (window && window->GetDirectXApp()) {
-                window->GetDirectXApp()->OnKeyDown(wParam);
-            }
-            break;
-
     }
 
+    if (message == WM_NCDESTROY) {
+        if (window) {
+            window->hWnd = nullptr;
+        }
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, 0);
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+
+    if (window && window->mDirectXApp) {
+        return window->mDirectXApp->MsgProc(hWnd, message, wParam, lParam);
+    }
 
     return DefWindowProc(hWnd, message, wParam, lParam);
 }

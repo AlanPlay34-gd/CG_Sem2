@@ -1,4 +1,4 @@
-﻿#include "RenderingSystem.h"
+#include "RenderingSystem.h"
 
 #include "d3dUtil.h"
 #include "../h/d3dx12.h"
@@ -124,14 +124,14 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
 }
 
 void RenderingSystem::BuildPSOs(ID3D12Device* device) {
-    auto vsGeom = d3dUtil::CompileShader(L"shaders/main_shader.hlsl", nullptr, "VS_Geometry", "vs_5_0");
-    auto vsCp = d3dUtil::CompileShader(L"shaders/main_shader.hlsl", nullptr, "VS_ControlPoint", "vs_5_0");
-    auto hs = d3dUtil::CompileShader(L"shaders/main_shader.hlsl", nullptr, "HS_Main", "hs_5_0");
-    auto ds = d3dUtil::CompileShader(L"shaders/main_shader.hlsl", nullptr, "DS_Main", "ds_5_0");
-    auto psGeom = d3dUtil::CompileShader(L"shaders/main_shader.hlsl", nullptr, "PS_Geometry", "ps_5_0");
+    auto vsGeom = d3dUtil::CompileShader(L"shader/main_shader.hlsl", nullptr, "VS_Geometry", "vs_5_0");
+    auto vsCp = d3dUtil::CompileShader(L"shader/main_shader.hlsl", nullptr, "VS_ControlPoint", "vs_5_0");
+    auto hs = d3dUtil::CompileShader(L"shader/main_shader.hlsl", nullptr, "HS_Main", "hs_5_0");
+    auto ds = d3dUtil::CompileShader(L"shader/main_shader.hlsl", nullptr, "DS_Main", "ds_5_0");
+    auto psGeom = d3dUtil::CompileShader(L"shader/main_shader.hlsl", nullptr, "PS_Geometry", "ps_5_0");
 
-    auto vsLighting = d3dUtil::CompileShader(L"shaders/lighting.hlsl", nullptr, "VS_Fullscreen", "vs_5_0");
-    auto psLighting = d3dUtil::CompileShader(L"shaders/lighting.hlsl", nullptr, "PS_Lighting", "ps_5_0");
+    auto vsLighting = d3dUtil::CompileShader(L"shader/lighting.hlsl", nullptr, "VS_Fullscreen", "vs_5_0");
+    auto psLighting = d3dUtil::CompileShader(L"shader/lighting.hlsl", nullptr, "PS_Lighting", "ps_5_0");
 
     std::array<D3D12_INPUT_ELEMENT_DESC, 5> inputLayout = {
         D3D12_INPUT_ELEMENT_DESC{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -158,9 +158,15 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
     geomDesc.RTVFormats[2] = DXGI_FORMAT_R32_FLOAT;
     geomDesc.DSVFormat = mDepthStencilFormat;
     geomDesc.SampleDesc.Count = 1;
+    //geomDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
 
     ThrowIfFailed(device->CreateGraphicsPipelineState(&geomDesc, IID_PPV_ARGS(&mGeometryPSO)),
                   "Create geometry PSO failed");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC geomWireDesc = geomDesc;
+    geomWireDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&geomWireDesc, IID_PPV_ARGS(&mGeometryWirePSO)),
+                  "Create geometry wireframe PSO failed");
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC tessDesc = geomDesc;
     tessDesc.VS = {vsCp->GetBufferPointer(), vsCp->GetBufferSize()};
@@ -168,9 +174,15 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
     tessDesc.DS = {ds->GetBufferPointer(), ds->GetBufferSize()};
     tessDesc.PS = {psGeom->GetBufferPointer(), psGeom->GetBufferSize()};
     tessDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+    //tessDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
 
     ThrowIfFailed(device->CreateGraphicsPipelineState(&tessDesc, IID_PPV_ARGS(&mTessellationPSO)),
                   "Create tessellation PSO failed");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC tessWireDesc = tessDesc;
+    tessWireDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&tessWireDesc, IID_PPV_ARGS(&mTessellationWirePSO)),
+                  "Create tessellation wireframe PSO failed");
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC lightDesc = {};
     lightDesc.InputLayout = {nullptr, 0};

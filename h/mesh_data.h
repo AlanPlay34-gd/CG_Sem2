@@ -1,34 +1,30 @@
-#pragma once
-#include <cstdint>
-#include <intsafe.h>
-#include <string>
-#include <vector>
+﻿#pragma once
+
 #include "Vertex.h"
 
-struct SubmeshMaterial
-{
+#include <string>
+#include <vector>
+
+struct SubmeshMaterial {
     std::string diffuseTextureName;
     std::string normalTextureName;
     std::string displacementTextureName;
     float shininess = 32.0f;
 
-    // Индексы в SRV куче (заполняются в bindMaterialsToTextures)
-    UINT diffuseSrvHeapIndex = 0;
-    UINT normalSrvHeapIndex = 0;
-    UINT displacementSrvHeapIndex = 0;
+    unsigned int diffuseSrvHeapIndex = 0;
+    unsigned int normalSrvHeapIndex = 0;
+    unsigned int displacementSrvHeapIndex = 0;
 };
 
-struct Submesh
-{
-    uint32_t indexCount = 0;
-    uint32_t startIndiceIndex = 0;
-    uint32_t startVerticeIndex = 0;
+struct Submesh {
+    unsigned int indexCount = 0;
+    unsigned int startIndexLocation = 0;
+    int baseVertexLocation = 0;
     SubmeshMaterial material;
 };
 
-struct MeshData
-{
+struct MeshData {
     std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
+    std::vector<unsigned int> indices;
     std::vector<Submesh> submeshes;
 };

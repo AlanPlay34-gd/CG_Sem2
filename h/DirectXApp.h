@@ -1,251 +1,186 @@
 ﻿#pragma once
 
-#include <DirectXMath.h>
-#include <d3d12.h>
-#include <d3dcompiler.h>
-#include <dxgi1_6.h>
-#include <memory>
-#include <string>
-#include <vector>
-#include <windows.h>
-#include <wrl/client.h>
-#include <unordered_map>
-#include <filesystem>
-
-#include "../h/model_loader.h"
-#include "../h/mesh_data.h"
-#include "../h/ObjectConstants.h"
-#include "../h/Timer.h"
-#include "../h/CameraConstants.h"
-#include "../h/UploadBuffer.h"
-#include "../h/vertex.h"
-#include "RenderingSystem.h"
 #include "Light.h"
-#include "Material.h"
-#include "MathHelper.h"
-#include "ThrowIfFailed.h"
-#include "Window.h"
-#include "GBuffer.h"
-#include "DDSTextureLoader.h"
-#include "Texture.h"
+#include "UploadBuffer.h"
+#include "mesh_data.h"
+#include "RenderingSystem.h"
 
-using Microsoft::WRL::ComPtr;
+#include <array>
+#include <d3d12.h>
+#include <dxgi1_6.h>
+#include <wrl.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 using namespace DirectX;
+using Microsoft::WRL::ComPtr;
+
+struct ObjectConstants {
+    XMFLOAT4X4 WorldViewProj = {};
+    XMFLOAT4X4 World = {};
+    XMFLOAT4X4 TextureTransform = {};
+    float TotalTime = 0.0f;
+    XMFLOAT3 Padding = {0.0f, 0.0f, 0.0f};
+};
+
+struct PassConstants {
+    XMFLOAT4X4 InvViewProj = {};
+    XMFLOAT3 EyePosW = {0.0f, 0.0f, 0.0f};
+    float Padding = 0.0f;
+    XMFLOAT4 AmbientColor = {0.08f, 0.08f, 0.1f, 1.0f};
+};
+
+class GameTimer;
 
 class DirectXApp {
 public:
-    DirectXApp(Window& window);
+    DirectXApp();
     ~DirectXApp();
 
-    bool Initialize();
-    void Shutdown();
+    bool Initialize(HWND hwnd, unsigned int width, unsigned int height);
 
-    // Framework methods
-    int Run();
-    virtual bool InitializeApp();
-    virtual void Update(const Timer& gt);
-    virtual void Draw(const Timer& gt);
-    void BuildObj(const std::string& path);
-    virtual void CalculateFrameStats();
+    void OnResize(unsigned int width, unsigned int height);
+    void Update(const GameTimer& gt);
+    void Draw(const GameTimer& gt);
 
-    // For Timer
-    void StopTimer() { mTimer.Stop(); }
-    void StartTimer() { mTimer.Start(); }
-    bool IsPaused() const { return mAppPaused; }
-    Timer& GetTimer() { return mTimer; }
-
-
-    // Mouse methods
-    virtual void OnMouseDown(WPARAM btnState, int x, int y);
-    virtual void OnMouseUp(WPARAM btnState, int x, int y);
-    virtual void OnMouseMove(WPARAM btnState, int x, int y);
-
-    // Resize
-    virtual void OnResize();
-
-    // Keyboard
-    virtual void OnKeyDown(WPARAM wParam);
-
-    void SetDirectXApp(DirectXApp* app) { dxApp = app; }
-    DirectXApp* GetDirectXApp() const { return dxApp; }
+    LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
+    bool InitDirect3D();
+    void CreateCommandObjects();
+    void CreateSwapChain();
+    void CreateRtvAndDsvDescriptorHeaps();
+    void CreateRenderTargetViews();
+    void CreateDepthStencilBuffer();
 
-    int mFallingLightsCount = 0;
-    int mGroundLightsCount = 0;
+    void BuildScene();
+    void LoadModels();
+    void BuildGeometryBuffers();
+    void LoadTextures();
+    void CreateFallbackTextures();
+    void BindSubmeshTextures();
 
-    std::vector<Light> mLights;
-    std::unique_ptr<RenderingSystem> mRenderingSystem;
-    std::unique_ptr<UploadBuffer<LightConstants>> mLightingCB;
-
-    bool mFallingLightsEnabled = false;
-    // Падающие источники света
-    std::vector<Light> mFallingLights;
-    float mSpawnTimer = 0.0f;
-    float mSpawnInterval = 0.02f;
-    int mMaxGroundLights = 1000;
-
+    void BuildConstantBuffers();
+    void BuildMainSrvHeap();
+    void BuildLights();
     void UpdateFallingLights(float dt);
-    void SpawnFallingLight();
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> mSecondaryTexture;
-    float mChessTileSize = 0.5f;
-    bool mChessboardMode = true;
+    void UpdateCamera(float dt);
 
-    float mYaw = 0.0f;
-    float mPitch = 0.0f;
+    void FlushCommandQueue();
 
-    //For Tiling and Animation
-    float mUVOffsetU = 0.0f;
-    float mUVOffsetV = 0.0f;
-    float mUVScaleU = 1.0f;
-    float mUVScaleV = 1.0f;
-    bool mAnimateTextures = false;
+    D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
+    ID3D12Resource* CurrentBackBuffer() const;
 
-    std::vector<Submesh> mSubmeshes;
-    std::vector<Material> mMaterials;
-    void CreateTextureFromTGA(
-        const std::string& path,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& texture);
+    D3D12_GPU_DESCRIPTOR_HANDLE GetGpuSrvHandle(unsigned int heapIndex) const;
 
-    DirectXApp* dxApp = nullptr;
+private:
+    struct TextureResource {
+        std::wstring path;
+        ComPtr<ID3D12Resource> resource;
+        ComPtr<ID3D12Resource> uploadHeap;
+        unsigned int srvHeapIndex = 0;
+    };
 
-    XMFLOAT3 mEyePos = XMFLOAT3(0.0f, 0.0f, 0.0f);
+    struct FallingLight {
+        XMFLOAT3 position = {0.0f, 5.0f, 0.0f};
+        XMFLOAT3 velocity = {0.0f, 0.0f, 0.0f};
+        XMFLOAT3 color = {1.0f, 0.7f, 0.3f};
+        float intensity = 16.0f;
+        float range = 10.0f;
+        bool settled = false;
+    };
 
+private:
+    static constexpr unsigned int SwapChainBufferCount = 2;
+    static constexpr unsigned int LightingCbElementCount = 2048;
 
-    Window& window;
+    HWND mHwnd = nullptr;
+    unsigned int mClientWidth = 1280;
+    unsigned int mClientHeight = 720;
 
-    // DXGI
-    ComPtr<IDXGIFactory4> dxgiFactory;
-    ComPtr<IDXGIAdapter1> adapter;
+    ComPtr<IDXGIFactory6> mDxgiFactory;
+    ComPtr<IDXGISwapChain> mSwapChain;
+    ComPtr<ID3D12Device> mDevice;
 
-    // D3D12
-    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12Fence> mFence;
+    unsigned long long mCurrentFence = 0;
+    bool mComInitialized = false;
+
     ComPtr<ID3D12CommandQueue> mCommandQueue;
     ComPtr<ID3D12CommandAllocator> mDirectCmdListAlloc;
     ComPtr<ID3D12GraphicsCommandList> mCommandList;
-    ComPtr<ID3D12Fence> mFence;
-    UINT64 mFenceValue = 0;
 
-    // SwapChain
-    ComPtr<IDXGISwapChain> mSwapChain;
-    static const int SwapChainBufferCount = 2;
-    ComPtr<ID3D12Resource> mSwapChainBuffer[SwapChainBufferCount];
-    int mCurrBackBuffer = 0;
-
-    // Descriptors
-    ComPtr<ID3D12DescriptorHeap> mRtvHeap;
-    ComPtr<ID3D12DescriptorHeap> mDsvHeap;
-    ComPtr<ID3D12DescriptorHeap> mCbvHeap;
+    std::array<ComPtr<ID3D12Resource>, SwapChainBufferCount> mSwapChainBuffer;
     ComPtr<ID3D12Resource> mDepthStencilBuffer;
 
-    UINT mRtvDescriptorSize = 0;
-    UINT mDsvDescriptorSize = 0;
-    UINT mCbvSrvUavDescriptorSize = 0;
+    ComPtr<ID3D12DescriptorHeap> mRtvHeap;
+    ComPtr<ID3D12DescriptorHeap> mDsvHeap;
+    ComPtr<ID3D12DescriptorHeap> mCbvSrvHeap;
+
+    unsigned int mRtvDescriptorSize = 0;
+    unsigned int mDsvDescriptorSize = 0;
+    unsigned int mCbvSrvUavDescriptorSize = 0;
 
     DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     DXGI_FORMAT mDepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 
-    std::unique_ptr<UploadBuffer<CameraConstants>> mCameraCB;
+    D3D12_VIEWPORT mScreenViewport = {};
+    D3D12_RECT mScissorRect = {};
 
-    // ScreenSize
-    int mClientWidth = 800;
-    int mClientHeight = 600;
+    unsigned int mCurrBackBuffer = 0;
 
-    // Viewport и Scissor
-    D3D12_VIEWPORT mScreenViewport;
-    D3D12_RECT mScissorRect;
+    std::unique_ptr<RenderingSystem> mRenderingSystem;
 
-    // Timer and State
-    Timer mTimer;
-    bool mAppPaused = false;
-    bool mResizing = false;
-    int mFrameCount = 0;
-    float mTimeElapsed = 0.0f;
-    std::wstring mMainWndCaption = L"DirectX 12 Framework";
+    MeshData mSceneMesh;
+    ComPtr<ID3D12Resource> mVertexBufferGPU;
+    ComPtr<ID3D12Resource> mVertexBufferUploader;
+    ComPtr<ID3D12Resource> mIndexBufferGPU;
+    ComPtr<ID3D12Resource> mIndexBufferUploader;
 
-    // =========== Geometry ===========
-    std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
-    Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBufferGPU;
-    Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBufferUploader;
-    D3D12_VERTEX_BUFFER_VIEW mVertexBufferView;
-    Microsoft::WRL::ComPtr<ID3D12Resource> mIndexBufferGPU;
-    Microsoft::WRL::ComPtr<ID3D12Resource> mIndexBufferUploader;
-    D3D12_INDEX_BUFFER_VIEW mIndexBufferView;
+    D3D12_VERTEX_BUFFER_VIEW mVertexBufferView = {};
+    D3D12_INDEX_BUFFER_VIEW mIndexBufferView = {};
 
-    // =========== Shaders ===========
-    Microsoft::WRL::ComPtr<ID3DBlob> mvsByteCode = nullptr;
-    Microsoft::WRL::ComPtr<ID3DBlob> mpsByteCode = nullptr;
+    std::vector<TextureResource> mTextureResources;
+    std::unordered_map<std::string, unsigned int> mTextureNameToIndex;
 
-    // =========== Constant Buffer ===========
-    std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB = nullptr;
+    unsigned int mFallbackDiffuseIndex = 0;
+    unsigned int mFallbackNormalIndex = 0;
+    unsigned int mFallbackDisplacementIndex = 0;
 
-    // =========== Root Signature и PSO ===========
-    Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature;
-    Microsoft::WRL::ComPtr<ID3D12PipelineState> mPSO;
+    unsigned int mTextureSrvStart = 3;
+    unsigned int mGBufferSrvStart = 0;
 
-    // Математика для камеры
-    float mTheta = 1.5f * XM_PI;
-    float mPhi = XM_PIDIV4;
-    float mRadius = 5.0f;
-    POINT mLastMousePos;
-    XMFLOAT4X4 mWorld = MathHelper::Identity4x4();
-    XMFLOAT4X4 mView = MathHelper::Identity4x4();
-    XMFLOAT4X4 mProj = MathHelper::Identity4x4();
+    std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
+    std::unique_ptr<UploadBuffer<PassConstants>> mPassCB;
+    std::unique_ptr<UploadBuffer<LightingConstants>> mLightingCB;
 
-    UINT mIndexCount;
+    std::vector<LightData> mLights;
+    std::vector<FallingLight> mFallingLights;
 
-    // Вспомогательные методы инициализации
-    bool CreateDXGIFactory();
-    bool GetHardwareAdapter();
-    bool CreateD3DDevice();
-    bool CreateCommandObjects();
-    bool CreateFence();
-    void FlushCommandQueue();
-    bool CreateSwapChain();
-    void QueryDescriptorSizes();
-    bool CreateDescriptorHeaps();
-    bool CreateRenderTargetViews();
-    bool CreateDepthStencilBuffer();
-    void CreateViewportAndScissor();
-    void SetViewportAndScissor();
+    bool mFallingBallsEnabled = false;
+    float mFallingSpawnTimer = 0.0f;
+    float mFallingSpawnInterval = 0.02f;
+    unsigned int mMaxFallingLights = 1000;
 
-    // Методы для геометрии и шейдеров
-    void BuildInputLayout();
-    //void BuildVertexBuffer();
-    //void BuildIndexBuffer();
-    void BuildShaders();
-    void BuildConstantBuffer();
-    void BuildRootSignature();
-    void BuildPSO();
-    void BuildWireframePSO();  // Новый метод для создания проволочного PSO
-    void CreateColorTexture(
-        const DirectX::XMFLOAT3& color,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& texture);
+    XMFLOAT3 mEyePos = {0.0f, 2.0f, -12.0f};
+    float mYaw = 0.0f;
+    float mPitch = 0.0f;
+    POINT mLastMousePos = {0, 0};
 
-    // Методы для доступа к ресурсам
-    ID3D12Resource* CurrentBackBuffer() const;
-    D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const {
-        return mDsvHeap->GetCPUDescriptorHandleForHeapStart();
-    }
-
-    // Загрузка текстур
-    void loadTextures();
-    void createDefaultTextures();
-    void buildCbvSrvHeap();
-    void bindMaterialsToTextures();
-
-    // Хранилище текстур
-    std::unordered_map<std::wstring, std::unique_ptr<Texture>> mTextures;
-    // Текстуры-заглушки
-    ComPtr<ID3D12Resource> mDefaultDiffuseTex;
-    ComPtr<ID3D12Resource> mDefaultNormalTex;
-    ComPtr<ID3D12Resource> mDefaultDisplacementTex;
-    ComPtr<ID3D12Resource> mDefaultDiffuseTexUpload;
-    ComPtr<ID3D12Resource> mDefaultNormalTexUpload;
-    ComPtr<ID3D12Resource> mDefaultDisplacementTexUpload;
-
-    // Вспомогательные переменные для кучи дескрипторов
-    UINT mCbvSrvDescriptorSize;
+    int mDebugViewMode = 1; // F1: default, F2: world normal debug, F3: tessellation factor + wireframe debug
+    bool mF1WasDown = false;
+    bool mF2WasDown = false;
+    bool mF3WasDown = false;
+    bool mBWasDown = false;
+    bool mTWasDown = false;
+    bool mRWasDown = false;
+    bool mAnimateTextures = false;
+    float mTexAnimU = 0.0f;
+    float mTexAnimV = 0.0f;
+    float mTexScaleU = 1.0f;
+    float mTexScaleV = 1.0f;
+    int mLastTitleMode = -1;
 };

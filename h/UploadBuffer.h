@@ -1,66 +1,64 @@
 ﻿#pragma once
+
+#include "d3dUtil.h"
+#include "../h/d3dx12.h"
+
+#include <wrl.h>
+#include <cstring>
 #include <d3d12.h>
-#include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
 
 template<typename T>
-class UploadBuffer
-{
+class UploadBuffer {
 public:
-    UploadBuffer(ID3D12Device* device, UINT elementCount, bool isConstantBuffer)
-        : mIsConstantBuffer(isConstantBuffer)
-    {
+    UploadBuffer(ID3D12Device* device, unsigned int elementCount, bool isConstantBuffer)
+        : mIsConstantBuffer(isConstantBuffer) {
         mElementByteSize = sizeof(T);
 
-        if (isConstantBuffer)
-            mElementByteSize = (sizeof(T) + 255) & ~255;
+        if (isConstantBuffer) {
+            mElementByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(T));
+        }
 
-        D3D12_HEAP_PROPERTIES heapProps = {};
-        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-        D3D12_RESOURCE_DESC resourceDesc = {};
-        resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        resourceDesc.Width = mElementByteSize * elementCount;
-        resourceDesc.Height = 1;
-        resourceDesc.DepthOrArraySize = 1;
-        resourceDesc.MipLevels = 1;
-        resourceDesc.Format = DXGI_FORMAT_UNKNOWN;
-        resourceDesc.SampleDesc.Count = 1;
-        resourceDesc.SampleDesc.Quality = 0;
-        resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-        device->CreateCommittedResource(
-            &heapProps,
+        ThrowIfFailed(device->CreateCommittedResource(
+            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
             D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+            &CD3DX12_RESOURCE_DESC::Buffer(static_cast<UINT64>(mElementByteSize) * elementCount),
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
-            IID_PPV_ARGS(&mUploadBuffer)
-        );
+            IID_PPV_ARGS(&mUploadBuffer)),
+            "Create upload buffer failed");
 
-        mUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedData));
+        ThrowIfFailed(mUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedData)),
+                      "Map upload buffer failed");
     }
 
-    ~UploadBuffer()
-    {
-        if (mUploadBuffer != nullptr)
+    UploadBuffer(const UploadBuffer&) = delete;
+    UploadBuffer& operator=(const UploadBuffer&) = delete;
+
+    ~UploadBuffer() {
+        if (mUploadBuffer) {
             mUploadBuffer->Unmap(0, nullptr);
+        }
         mMappedData = nullptr;
     }
 
-    UINT GetElementSize() const { return mElementByteSize; }
+    ID3D12Resource* Resource() const {
+        return mUploadBuffer.Get();
+    }
 
-    ID3D12Resource* Resource() const { return mUploadBuffer.Get(); }
+    unsigned int GetElementSize() const {
+        return mElementByteSize;
+    }
 
-    void CopyData(int elementIndex, const T& data)
-    {
+    void CopyData(int elementIndex, const T& data) {
         memcpy(&mMappedData[elementIndex * mElementByteSize], &data, sizeof(T));
     }
 
 private:
     ComPtr<ID3D12Resource> mUploadBuffer;
-    BYTE* mMappedData = nullptr;
-    UINT mElementByteSize = 0;
+    unsigned char* mMappedData = nullptr;
+
+    unsigned int mElementByteSize = 0;
     bool mIsConstantBuffer = false;
 };

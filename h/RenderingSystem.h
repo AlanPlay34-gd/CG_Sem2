@@ -1,104 +1,52 @@
-#pragma once
+﻿#pragma once
+
+#include "GBuffer.h"
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#include <wrl/client.h>
+#include <wrl.h>
 #include <memory>
-#include <vector>
-#include <string>
-#include "UploadBuffer.h"
-#include "Light.h"
-#include "h/mesh_data.h"
-#include "Material.h"
-#include "GBuffer.h"
-#include "CameraConstants.h"
 
-using Microsoft::WRL::ComPtr;
-
-class RenderingSystem
-{
+class RenderingSystem {
 public:
-    RenderingSystem(
-        ID3D12Device* device,
-        ID3D12CommandQueue* commandQueue,
-        ID3D12GraphicsCommandList* commandList,
-        ID3D12CommandAllocator* commandAllocator,
-        ID3D12Fence* fence,
-        UINT swapChainBufferCount,
-        DXGI_FORMAT backBufferFormat);
+    bool Initialize(ID3D12Device* device,
+                    unsigned int width,
+                    unsigned int height,
+                    DXGI_FORMAT backBufferFormat,
+                    DXGI_FORMAT depthStencilFormat);
 
-    ~RenderingSystem();
+    void OnResize(ID3D12Device* device, unsigned int width, unsigned int height);
 
-    bool Initialize(UINT width, UINT height);
+    ID3D12RootSignature* GetGeometryRootSignature() const { return mGeometryRootSignature.Get(); }
+    ID3D12RootSignature* GetLightingRootSignature() const { return mLightingRootSignature.Get(); }
 
-    void GeometryPass(
-        ID3D12PipelineState* pso,
-        ID3D12RootSignature* rootSignature,
-        ID3D12DescriptorHeap* cbvSrvHeap,
-        UINT cbvSrvDescriptorSize,
-        const std::vector<Submesh>& submeshes,
-        const std::vector<Material>& materials,
-        ID3D12Resource* vertexBuffer,
-        ID3D12Resource* indexBuffer,
-        const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
-        const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
-        ID3D12Resource* depthStencilBuffer,
-        D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
-        const D3D12_VIEWPORT& viewport,
-        const D3D12_RECT& scissorRect,
-        UINT materialCount,
-        ID3D12Resource* secondaryTexture);
+    ID3D12PipelineState* GetGeometryPSO() const { return mGeometryPSO.Get(); }
+    ID3D12PipelineState* GetGeometryWirePSO() const { return mGeometryWirePSO.Get(); }
+    ID3D12PipelineState* GetTessellationPSO() const { return mTessellationPSO.Get(); }
+    ID3D12PipelineState* GetTessellationWirePSO() const { return mTessellationWirePSO.Get(); }
+    ID3D12PipelineState* GetLightingPSO() const { return mLightingPSO.Get(); }
 
-    void LightingPass(
-        ID3D12Resource* backBuffer,
-        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
-        const std::vector<Light>& lights,
-        const DirectX::XMFLOAT3& cameraPos,
-        const D3D12_VIEWPORT& viewport,
-        const D3D12_RECT& scissorRect,
-        int& currBackBufferIndex,
-        IDXGISwapChain* swapChain,
-        ID3D12PipelineState* lightingPSO,
-        ID3D12RootSignature* lightingRootSignature,
-        UploadBuffer<LightConstants>* lightingCB,
-        UploadBuffer<CameraConstants>* cameraCB,
-        GBuffer* gBuffer);
-
-    void Shutdown();
-    void FlushCommandQueue();
-
-    GBuffer* GetGBuffer() { return mGBuffer.get(); }
-    UploadBuffer<LightConstants>* GetLightingCB() { return mLightingCB.get(); }
-    ID3D12PipelineState* GetLightingPSO() { return mLightingPSO.Get(); }
-    ID3D12RootSignature* GetLightingRootSignature() { return mLightingRootSignature.Get(); }
+    GBuffer* GetGBuffer() const { return mGBuffer.get(); }
 
 private:
-    std::vector<Light> mLights;
-    bool CreateGBuffer(UINT width, UINT height);
-    bool CreateLightingResources();
+    void BuildRootSignatures(ID3D12Device* device);
+    void BuildPSOs(ID3D12Device* device);
 
-    // Устройство и очередь
-    ID3D12Device* mDevice;
-    ID3D12CommandQueue* mCommandQueue;
-    ID3D12GraphicsCommandList* mCommandList;
-    ID3D12CommandAllocator* mCommandAllocator;
-    ID3D12Fence* mFence;
-    UINT mSwapChainBufferCount;
-    DXGI_FORMAT mBackBufferFormat;
+private:
+    unsigned int mWidth = 1;
+    unsigned int mHeight = 1;
 
-    // G-буфер
+    DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    DXGI_FORMAT mDepthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mGeometryRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mLightingRootSignature;
+
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mGeometryPSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mGeometryWirePSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mTessellationPSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mTessellationWirePSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mLightingPSO;
+
     std::unique_ptr<GBuffer> mGBuffer;
-
-    // Ресурсы освещения
-    ComPtr<ID3D12PipelineState> mLightingPSO;
-    ComPtr<ID3D12RootSignature> mLightingRootSignature;
-    std::unique_ptr<UploadBuffer<LightConstants>> mLightingCB;
-
-    // Размеры дескрипторов
-    UINT mRtvDescriptorSize = 0;
-    UINT mDsvDescriptorSize = 0;
-    UINT mCbvSrvUavDescriptorSize = 0;
-
-    UINT mWidth = 0;
-    UINT mHeight = 0;
 };
