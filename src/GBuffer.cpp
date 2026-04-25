@@ -112,9 +112,10 @@ void GBuffer::BuildResources(ID3D12Device* device) {
         } else {
             clear.Color[0] = 1.0f; clear.Color[1] = 1.0f; clear.Color[2] = 1.0f; clear.Color[3] = 1.0f;
         }
+        const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
 
         ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+            &defaultHeapProps,
             D3D12_HEAP_FLAG_NONE,
             &texDesc,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,

@@ -3,12 +3,16 @@
 #include "DirectXApp.h"
 #include "GameTimer.h"
 
+#include <string>
+#include <exception>
+
 Window::Window(HINSTANCE instance, int showCmd)
     : hInstance(instance), nCmdShow(showCmd) {
 }
 
 Window::~Window() {
     if (hWnd && IsWindow(hWnd)) {
+        SetWindowLongPtr(hWnd, GWLP_USERDATA, 0);
         DestroyWindow(hWnd);
     }
     hWnd = nullptr;
@@ -71,9 +75,16 @@ int Window::Run(DirectXApp& app, GameTimer& timer) {
             if (!hWnd || !IsWindow(hWnd)) {
                 break;
             }
-            timer.Tick();
-            app.Update(timer);
-            app.Draw(timer);
+            try {
+                timer.Tick();
+                app.Update(timer);
+                app.Draw(timer);
+            } catch (const std::exception& ex) {
+                std::string msg = "Runtime exception: ";
+                msg += ex.what();
+                MessageBoxA(hWnd, msg.c_str(), "Runtime Error", MB_OK | MB_ICONERROR);
+                PostQuitMessage(1);
+            }
         }
     }
 

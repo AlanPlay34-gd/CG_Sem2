@@ -14,6 +14,7 @@
 #include <array>
 #include <cctype>
 #include <filesystem>
+#include <memory>
 #include <limits>
 #include <random>
 #include <sstream>
@@ -58,20 +59,24 @@ ComPtr<ID3D12Resource> CreateDefaultBuffer(
     UINT64 byteSize,
     ComPtr<ID3D12Resource>& uploadBuffer) {
     ComPtr<ID3D12Resource> defaultBuffer;
+    const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+    const CD3DX12_RESOURCE_DESC defaultBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(byteSize);
 
     ThrowIfFailed(device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        &defaultHeapProps,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(byteSize),
+        &defaultBufferDesc,
         D3D12_RESOURCE_STATE_COMMON,
         nullptr,
         IID_PPV_ARGS(&defaultBuffer)),
         "Create default buffer failed");
 
+    const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+    const CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(byteSize);
     ThrowIfFailed(device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        &uploadHeapProps,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(byteSize),
+        &uploadBufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
         IID_PPV_ARGS(&uploadBuffer)),
@@ -105,23 +110,21 @@ bool LoadWicTextureFromFile12(
     const std::wstring& filePath,
     ComPtr<ID3D12Resource>& texture,
     ComPtr<ID3D12Resource>& uploadHeap) {
-    static ComPtr<IWICImagingFactory> wicFactory;
-    if (!wicFactory) {
-        HRESULT hr = CoCreateInstance(
-            CLSID_WICImagingFactory2,
+    ComPtr<IWICImagingFactory> wicFactory;
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory2,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&wicFactory));
+    if (FAILED(hr)) {
+        hr = CoCreateInstance(
+            CLSID_WICImagingFactory,
             nullptr,
             CLSCTX_INPROC_SERVER,
             IID_PPV_ARGS(&wicFactory));
-        if (FAILED(hr)) {
-            hr = CoCreateInstance(
-                CLSID_WICImagingFactory,
-                nullptr,
-                CLSCTX_INPROC_SERVER,
-                IID_PPV_ARGS(&wicFactory));
-        }
-        if (FAILED(hr)) {
-            return false;
-        }
+    }
+    if (FAILED(hr)) {
+        return false;
     }
 
     ComPtr<IWICBitmapDecoder> decoder;
@@ -178,9 +181,10 @@ bool LoadWicTextureFromFile12(
     texDesc.SampleDesc.Count = 1;
     texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
 
     if (FAILED(device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        &defaultHeapProps,
         D3D12_HEAP_FLAG_NONE,
         &texDesc,
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -190,10 +194,12 @@ bool LoadWicTextureFromFile12(
     }
 
     const UINT64 uploadSize = GetRequiredIntermediateSize(texture.Get(), 0, 1);
+    const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+    const CD3DX12_RESOURCE_DESC uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
     if (FAILED(device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+        &uploadHeapProps,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(uploadSize),
+        &uploadDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
         IID_PPV_ARGS(&uploadHeap)))) {
@@ -224,10 +230,41 @@ DirectXApp::~DirectXApp() {
     if (mDevice) {
         FlushCommandQueue();
     }
-    if (mComInitialized) {
-        CoUninitialize();
-        mComInitialized = false;
+
+    mRenderingSystem.reset();
+    mObjectCB.reset();
+    mPassCB.reset();
+    mLightingCB.reset();
+
+    mTextureResources.clear();
+    mTextureNameToIndex.clear();
+    mSceneMesh = {};
+    mLights.clear();
+    mFallingLights.clear();
+
+    mVertexBufferUploader.Reset();
+    mIndexBufferUploader.Reset();
+    mVertexBufferGPU.Reset();
+    mIndexBufferGPU.Reset();
+    mDepthStencilBuffer.Reset();
+    for (auto& buffer : mSwapChainBuffer) {
+        buffer.Reset();
     }
+
+    mCbvSrvHeap.Reset();
+    mRtvHeap.Reset();
+    mDsvHeap.Reset();
+    mCommandList.Reset();
+    mDirectCmdListAlloc.Reset();
+    mCommandQueue.Reset();
+    mFence.Reset();
+    mSwapChain.Reset();
+    mDevice.Reset();
+    mDxgiFactory.Reset();
+
+    // Keep COM initialized until process end to avoid shutdown-time heap corruption
+    // from third-party/static COM users that may outlive this object.
+    mComInitialized = false;
 }
 
 bool DirectXApp::Initialize(HWND hwnd, unsigned int width, unsigned int height) {
@@ -402,9 +439,10 @@ void DirectXApp::CreateDepthStencilBuffer() {
     clear.Format = mDepthStencilFormat;
     clear.DepthStencil.Depth = 1.0f;
     clear.DepthStencil.Stencil = 0;
+    const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
 
     ThrowIfFailed(mDevice->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        &defaultHeapProps,
         D3D12_HEAP_FLAG_NONE,
         &depthDesc,
         D3D12_RESOURCE_STATE_DEPTH_WRITE,
@@ -533,13 +571,16 @@ void DirectXApp::LoadModels() {
     }
 
     const float targetRadius = 3.5f;
+    const float modelYOffset = targetRadius * 0.15f;
     const float normalizeScale = (radius > 1e-4f) ? (targetRadius / radius) : 1.0f;
 
     for (auto& v : mesh.vertices) {
         v.Position.x = (v.Position.x - center.x) * normalizeScale;
-        v.Position.y = (v.Position.y - center.y) * normalizeScale + targetRadius * 0.15f;
+        v.Position.y = (v.Position.y - center.y) * normalizeScale + modelYOffset;
         v.Position.z = (v.Position.z - center.z) * normalizeScale;
     }
+
+    mModelCenter = XMFLOAT3(0.0f, modelYOffset, 0.0f);
 
     for (auto& sm : mesh.submeshes) {
         sm.material.diffuseTextureName = "Earth_ALB";
@@ -661,9 +702,10 @@ void DirectXApp::CreateFallbackTextures() {
         texDesc.SampleDesc.Count = 1;
         texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         texDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
 
         ThrowIfFailed(mDevice->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+            &defaultHeapProps,
             D3D12_HEAP_FLAG_NONE,
             &texDesc,
             D3D12_RESOURCE_STATE_COPY_DEST,
@@ -672,11 +714,13 @@ void DirectXApp::CreateFallbackTextures() {
             "Create fallback texture failed");
 
         const UINT64 uploadSize = GetRequiredIntermediateSize(tex.resource.Get(), 0, 1);
+        const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+        const CD3DX12_RESOURCE_DESC uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
 
         ThrowIfFailed(mDevice->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            &uploadHeapProps,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(uploadSize),
+            &uploadDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
             IID_PPV_ARGS(&tex.uploadHeap)),
@@ -891,6 +935,7 @@ void DirectXApp::UpdateFallingLights(float dt) {
 
 void DirectXApp::UpdateCamera(float dt) {
     const float moveSpeed = 5.f;
+    const float moveStep = moveSpeed * dt;
 
     const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
         std::cos(mPitch) * std::sin(mYaw),
@@ -904,16 +949,16 @@ void DirectXApp::UpdateCamera(float dt) {
     XMVECTOR position = XMLoadFloat3(&mEyePos);
 
     if (GetAsyncKeyState('W') & 0x8000) {
-        position += forward * moveSpeed * dt;
+        position = XMVectorAdd(position, XMVectorScale(forward, moveStep));
     }
     if (GetAsyncKeyState('S') & 0x8000) {
-        position -= forward * moveSpeed * dt;
+        position = XMVectorSubtract(position, XMVectorScale(forward, moveStep));
     }
     if (GetAsyncKeyState('A') & 0x8000) {
-        position -= right * moveSpeed * dt;
+        position = XMVectorSubtract(position, XMVectorScale(right, moveStep));
     }
     if (GetAsyncKeyState('D') & 0x8000) {
-        position += right * moveSpeed * dt;
+        position = XMVectorAdd(position, XMVectorScale(right, moveStep));
     }
 
     XMStoreFloat3(&mEyePos, position);
@@ -928,6 +973,7 @@ void DirectXApp::Update(const GameTimer& gt) {
     const bool bDown = (GetAsyncKeyState('B') & 0x8000) != 0;
     const bool tDown = (GetAsyncKeyState('T') & 0x8000) != 0;
     const bool rDown = (GetAsyncKeyState('R') & 0x8000) != 0;
+    const bool gDown = (GetAsyncKeyState('G') & 0x8000) != 0;
     bool titleDirty = false;
 
     if (f1Down && !mF1WasDown) {
@@ -970,6 +1016,13 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
     mRWasDown = rDown;
 
+    if (gDown && !mGWasDown) {
+        mDisplacementWaveActive = true;
+        mDisplacementWaveProgress = 0.0f;
+        titleDirty = true;
+    }
+    mGWasDown = gDown;
+
     auto clampTiling = [](float v) {
         return std::clamp(v, 0.10f, 16.0f);
     };
@@ -1009,6 +1062,15 @@ void DirectXApp::Update(const GameTimer& gt) {
         titleDirty = true;
     }
 
+    if (mDisplacementWaveActive) {
+        mDisplacementWaveProgress += gt.DeltaTime() * 0.33f;
+        if (mDisplacementWaveProgress > 1.15f) {
+            mDisplacementWaveActive = false;
+            mDisplacementWaveProgress = 0.0f;
+            titleDirty = true;
+        }
+    }
+
     if (titleDirty) {
         std::wostringstream ws;
         ws << L"DirectX 12 Framework";
@@ -1022,6 +1084,7 @@ void DirectXApp::Update(const GameTimer& gt) {
 
         ws << L" | B: Falling Lights " << (mFallingBallsEnabled ? L"ON" : L"OFF");
         ws << L" | T: Texture Anim " << (mAnimateTextures ? L"ON" : L"OFF");
+        ws << L" | G: Disp Wave " << (mDisplacementWaveActive ? L"RUN" : L"READY");
         ws << std::fixed << std::setprecision(2);
         ws << L" | TileU=" << mTexScaleU << L" TileV=" << mTexScaleV;
         SetWindowTextW(mHwnd, ws.str().c_str());
@@ -1067,6 +1130,12 @@ void DirectXApp::Update(const GameTimer& gt) {
     obj.Padding.x = static_cast<float>(mDebugViewMode);
     obj.Padding.y = 0.06f;
     obj.Padding.z = 0.0f;
+    obj.WaveParams = XMFLOAT4(
+        mDisplacementWaveProgress,
+        5.0f,
+        0.08f,
+        mDisplacementWaveActive ? 1.0f : 0.0f);
+    obj.ObjectCenter = XMFLOAT4(mModelCenter.x, mModelCenter.y, mModelCenter.z, 1.0f);
     mObjectCB->CopyData(0, obj);
 
     PassConstants pass = {};

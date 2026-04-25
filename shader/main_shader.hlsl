@@ -10,6 +10,8 @@ cbuffer ObjectConstants : register(b0)
     float4x4 gTextureTransform;
     float gTotalTime;
     float3 gObjectPadding;
+    float4 gWaveParams;
+    float4 gObjectCenter;
 };
 
 cbuffer PassConstants : register(b1)
@@ -140,6 +142,15 @@ PixelIn DS_Main(HSConstants hsc, float3 bary : SV_DomainLocation, const OutputPa
     float height = gDisplacementMap.SampleLevel(gLinearWrap, texC, 0.0f).r;
     float displacement = (height - 0.5f) * 2.0f;
     float dispStrength = (gObjectPadding.y > 0.0f) ? gObjectPadding.y : 0.2f;
+
+    if (gWaveParams.w > 0.5f)
+    {
+        float3 sphereDir = normalize(posW - gObjectCenter.xyz);
+        float verticalCoord = 1.0f - saturate(sphereDir.y * 0.5f + 0.5f);
+        float distToWave = abs(verticalCoord - gWaveParams.x);
+        float waveBand = 1.0f - smoothstep(0.0f, max(gWaveParams.z, 1e-4f), distToWave);
+        displacement += waveBand * gWaveParams.y;
+    }
 
     posW += normalW * (displacement * dispStrength);
 

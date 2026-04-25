@@ -8,6 +8,7 @@
 #include <array>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <memory>
 #include <wrl.h>
 #include <string>
 #include <unordered_map>
@@ -22,6 +23,8 @@ struct ObjectConstants {
     XMFLOAT4X4 TextureTransform = {};
     float TotalTime = 0.0f;
     XMFLOAT3 Padding = {0.0f, 0.0f, 0.0f};
+    XMFLOAT4 WaveParams = {0.0f, 0.0f, 0.0f, 0.0f};
+    XMFLOAT4 ObjectCenter = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 struct PassConstants {
@@ -177,10 +180,14 @@ private:
     bool mBWasDown = false;
     bool mTWasDown = false;
     bool mRWasDown = false;
+    bool mGWasDown = false;
     bool mAnimateTextures = false;
+    bool mDisplacementWaveActive = false;
+    float mDisplacementWaveProgress = 0.0f;
     float mTexAnimU = 0.0f;
     float mTexAnimV = 0.0f;
     float mTexScaleU = 1.0f;
     float mTexScaleV = 1.0f;
+    XMFLOAT3 mModelCenter = {0.0f, 0.0f, 0.0f};
     int mLastTitleMode = -1;
 };

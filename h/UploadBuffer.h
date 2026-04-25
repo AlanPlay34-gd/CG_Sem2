@@ -6,6 +6,7 @@
 #include <wrl.h>
 #include <cstring>
 #include <d3d12.h>
+#include <stdexcept>
 
 using Microsoft::WRL::ComPtr;
 
@@ -14,16 +15,20 @@ class UploadBuffer {
 public:
     UploadBuffer(ID3D12Device* device, unsigned int elementCount, bool isConstantBuffer)
         : mIsConstantBuffer(isConstantBuffer) {
+        mElementCount = elementCount;
         mElementByteSize = sizeof(T);
 
         if (isConstantBuffer) {
             mElementByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(T));
         }
+        const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+        const CD3DX12_RESOURCE_DESC uploadDesc =
+            CD3DX12_RESOURCE_DESC::Buffer(static_cast<UINT64>(mElementByteSize) * elementCount);
 
         ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+            &uploadHeapProps,
             D3D12_HEAP_FLAG_NONE,
-            &CD3DX12_RESOURCE_DESC::Buffer(static_cast<UINT64>(mElementByteSize) * elementCount),
+            &uploadDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr,
             IID_PPV_ARGS(&mUploadBuffer)),
@@ -52,6 +57,9 @@ public:
     }
 
     void CopyData(int elementIndex, const T& data) {
+        if (elementIndex < 0 || static_cast<unsigned int>(elementIndex) >= mElementCount) {
+            throw std::runtime_error("UploadBuffer::CopyData index out of range");
+        }
         memcpy(&mMappedData[elementIndex * mElementByteSize], &data, sizeof(T));
     }
 
@@ -59,6 +67,7 @@ private:
     ComPtr<ID3D12Resource> mUploadBuffer;
     unsigned char* mMappedData = nullptr;
 
+    unsigned int mElementCount = 0;
     unsigned int mElementByteSize = 0;
     bool mIsConstantBuffer = false;
 };
