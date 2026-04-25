@@ -135,7 +135,10 @@ PixelIn DS_Main(HSConstants hsc, float3 bary : SV_DomainLocation, const OutputPa
     float3 bitangentW = normalize(bary.x * patch[0].BitangentW + bary.y * patch[1].BitangentW + bary.z * patch[2].BitangentW);
     float2 texC = bary.x * patch[0].TexC + bary.y * patch[1].TexC + bary.z * patch[2].TexC;
 
-    float displacement = gDisplacementMap.SampleLevel(gLinearWrap, texC, 0.0f).r;
+    // Signed displacement around 0.5 level:
+    // 0.5 means neutral, higher pushes out, lower pushes in.
+    float height = gDisplacementMap.SampleLevel(gLinearWrap, texC, 0.0f).r;
+    float displacement = (height - 0.5f) * 2.0f;
     float dispStrength = (gObjectPadding.y > 0.0f) ? gObjectPadding.y : 0.2f;
 
     posW += normalW * (displacement * dispStrength);

@@ -1065,7 +1065,7 @@ void DirectXApp::Update(const GameTimer& gt) {
     XMStoreFloat4x4(&obj.TextureTransform, XMMatrixTranspose(texTransform));
     obj.TotalTime = gt.TotalTime();
     obj.Padding.x = static_cast<float>(mDebugViewMode);
-    obj.Padding.y = 0.20f;
+    obj.Padding.y = 0.06f;
     obj.Padding.z = 0.0f;
     mObjectCB->CopyData(0, obj);
 
