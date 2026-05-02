@@ -966,6 +966,37 @@ void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources
     mTexAnimV = 0.0f;
     mTexScaleU = 1.0f;
     mTexScaleV = 1.0f;
+    mAnimatedTracks.clear();
+    std::vector<unsigned int> earthIndices;
+    earthIndices.reserve(mSceneObjects.size());
+    for (unsigned int i = 0; i < static_cast<unsigned int>(mSceneObjects.size()); ++i) {
+        const auto& obj = mSceneObjects[i];
+        const auto& model = mModelAssets[obj.modelAssetIndex];
+        if (ToLowerAscii(model.name) == "earth") {
+            earthIndices.push_back(i);
+        }
+    }
+
+    auto addTrack = [&](unsigned int objectIndex, float halfWidth, float speed, float phaseOffset) {
+        if (objectIndex >= static_cast<unsigned int>(mSceneObjects.size())) {
+            return;
+        }
+        AnimatedObjectTrack track;
+        track.objectIndex = static_cast<int>(objectIndex);
+        track.basePosition = mSceneObjects[objectIndex].position;
+        track.halfWidth = halfWidth;
+        track.speed = speed;
+        track.phaseOffset = phaseOffset;
+        mAnimatedTracks.push_back(track);
+    };
+
+    if (mActiveSceneIndex == 1u && earthIndices.size() >= 2u) {
+        // Scene 2: animate two nearby planets.
+        addTrack(earthIndices[0], 2.0f, 2.2f, 0.0f);
+        addTrack(earthIndices[1], 2.0f, 2.2f, 1.15f);
+    } else if (!earthIndices.empty()) {
+        addTrack(earthIndices[0], (mActiveSceneIndex == 2u) ? 3.0f : 2.0f, 2.2f, 0.0f);
+    }
 
     RebuildSceneObjectTransforms();
     BuildOctree();
@@ -986,26 +1017,30 @@ void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources
     UpdateWindowTitle();
 }
 
+void DirectXApp::UpdateSceneObjectTransform(SceneObject& obj) {
+    const XMMATRIX world =
+        XMMatrixScaling(obj.scale.x, obj.scale.y, obj.scale.z) *
+        XMMatrixRotationY(obj.rotationY) *
+        XMMatrixTranslation(obj.position.x, obj.position.y, obj.position.z);
+    XMStoreFloat4x4(&obj.world, world);
+
+    const ModelAsset& model = mModelAssets[obj.modelAssetIndex];
+    const BoundingBox localBounds(model.localBoundsCenter, model.localBoundsExtents);
+    BoundingBox worldBounds;
+    localBounds.Transform(worldBounds, world);
+
+    obj.worldBounds = worldBounds;
+    obj.worldBoundsCenter = worldBounds.Center;
+    obj.worldBoundsExtents = worldBounds.Extents;
+    obj.worldBoundsRadius = std::sqrt(
+        worldBounds.Extents.x * worldBounds.Extents.x +
+        worldBounds.Extents.y * worldBounds.Extents.y +
+        worldBounds.Extents.z * worldBounds.Extents.z);
+}
+
 void DirectXApp::RebuildSceneObjectTransforms() {
     for (auto& obj : mSceneObjects) {
-        const XMMATRIX world =
-            XMMatrixScaling(obj.scale.x, obj.scale.y, obj.scale.z) *
-            XMMatrixRotationY(obj.rotationY) *
-            XMMatrixTranslation(obj.position.x, obj.position.y, obj.position.z);
-        XMStoreFloat4x4(&obj.world, world);
-
-        const ModelAsset& model = mModelAssets[obj.modelAssetIndex];
-        const BoundingBox localBounds(model.localBoundsCenter, model.localBoundsExtents);
-        BoundingBox worldBounds;
-        localBounds.Transform(worldBounds, world);
-
-        obj.worldBounds = worldBounds;
-        obj.worldBoundsCenter = worldBounds.Center;
-        obj.worldBoundsExtents = worldBounds.Extents;
-        obj.worldBoundsRadius = std::sqrt(
-            worldBounds.Extents.x * worldBounds.Extents.x +
-            worldBounds.Extents.y * worldBounds.Extents.y +
-            worldBounds.Extents.z * worldBounds.Extents.z);
+        UpdateSceneObjectTransform(obj);
     }
 }
 
@@ -1176,17 +1211,36 @@ void DirectXApp::CollectVisibleObjects(const XMMATRIX& view, const XMMATRIX& pro
     const XMMATRIX invView = XMMatrixInverse(nullptr, view);
     viewFrustum.Transform(worldFrustum, invView);
 
-    if (mOctreeCullingEnabled && mOctreeRoot) {
+    const bool useOctree = mOctreeCullingEnabled && mOctreeRoot;
+    if (useOctree) {
         CollectVisibleFromOctree(mOctreeRoot.get(), worldFrustum);
-        return;
+    } else {
+        mVisibleObjects.reserve(mSceneObjects.size());
+        for (unsigned int objectIndex = 0; objectIndex < static_cast<unsigned int>(mSceneObjects.size()); ++objectIndex) {
+            ++mObjectsTestedThisFrame;
+            const SceneObject& object = mSceneObjects[objectIndex];
+            if (worldFrustum.Contains(object.worldBounds) != DISJOINT) {
+                mVisibleObjects.push_back(objectIndex);
+            }
+        }
     }
 
-    mVisibleObjects.reserve(mSceneObjects.size());
-    for (unsigned int objectIndex = 0; objectIndex < static_cast<unsigned int>(mSceneObjects.size()); ++objectIndex) {
-        ++mObjectsTestedThisFrame;
-        const SceneObject& object = mSceneObjects[objectIndex];
-        if (worldFrustum.Contains(object.worldBounds) != DISJOINT) {
-            mVisibleObjects.push_back(objectIndex);
+    if (useOctree && !mAnimatedTracks.empty()) {
+        for (const auto& track : mAnimatedTracks) {
+            if (track.objectIndex < 0 || track.objectIndex >= static_cast<int>(mSceneObjects.size())) {
+                continue;
+            }
+
+            const unsigned int animatedIndex = static_cast<unsigned int>(track.objectIndex);
+            mVisibleObjects.erase(
+                std::remove(mVisibleObjects.begin(), mVisibleObjects.end(), animatedIndex),
+                mVisibleObjects.end());
+
+            ++mObjectsTestedThisFrame;
+            const SceneObject& animated = mSceneObjects[animatedIndex];
+            if (worldFrustum.Contains(animated.worldBounds) != DISJOINT) {
+                mVisibleObjects.push_back(animatedIndex);
+            }
         }
     }
 }
@@ -1566,6 +1620,77 @@ void DirectXApp::UpdateFallingLights(float dt) {
         mFallingLights.end());
 }
 
+float DirectXApp::ComputeLodAnimationTime(float dt, float totalTime, float distanceToCamera, float& timeAccum, float& stepAccum) {
+    float step = 0.0f;
+    if (distanceToCamera > 140.0f) {
+        step = 1.0f / 2.0f;   // ultra far: ~2 FPS
+    } else if (distanceToCamera > 100.0f) {
+        step = 1.0f / 4.0f;   // very far: ~4 FPS
+    } else if (distanceToCamera > 70.0f) {
+        step = 1.0f / 8.0f;   // far: ~8 FPS
+    } else if (distanceToCamera > 45.0f) {
+        step = 1.0f / 12.0f;  // mid-far: ~12 FPS
+    } else if (distanceToCamera > 25.0f) {
+        step = 1.0f / 20.0f;  // mid: ~20 FPS
+    } else if (distanceToCamera > 12.0f) {
+        step = 1.0f / 30.0f;  // near: ~30 FPS
+    }
+
+    if (step <= 0.0f) {
+        timeAccum = totalTime;
+        stepAccum = 0.0f;
+    } else {
+        stepAccum += dt;
+        while (stepAccum >= step) {
+            stepAccum -= step;
+            timeAccum += step;
+        }
+    }
+
+    return timeAccum;
+}
+
+void DirectXApp::UpdateAnimatedObjects(float dt, float totalTime) {
+    if (mAnimatedTracks.empty()) {
+        return;
+    }
+
+    for (auto& track : mAnimatedTracks) {
+        if (track.objectIndex < 0 || track.objectIndex >= static_cast<int>(mSceneObjects.size())) {
+            continue;
+        }
+
+        SceneObject& animated = mSceneObjects[static_cast<unsigned int>(track.objectIndex)];
+
+        const float dx = animated.position.x - mEyePos.x;
+        const float dy = animated.position.y - mEyePos.y;
+        const float dz = animated.position.z - mEyePos.z;
+        const float distanceToCamera = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+        // Universal LOD sample time: any animation should use this sampled time.
+        const float sampledTime = ComputeLodAnimationTime(
+            dt, totalTime, distanceToCamera, track.timeAccum, track.stepAccum);
+
+        // Ping-pong movement along X: right -> left -> right -> ...
+        const float trackHalfWidth = track.halfWidth;
+        const float cycleLength = trackHalfWidth * 4.0f;
+        const float phase = std::fmod(sampledTime * track.speed + track.phaseOffset, cycleLength);
+        float xOffset = 0.0f;
+        if (phase < (trackHalfWidth * 2.0f)) {
+            xOffset = trackHalfWidth - phase; // +R -> -R
+        } else {
+            xOffset = -trackHalfWidth + (phase - trackHalfWidth * 2.0f); // -R -> +R
+        }
+
+        animated.position.x = track.basePosition.x + xOffset;
+        animated.position.z = track.basePosition.z;
+        animated.position.y = track.basePosition.y;
+        animated.rotationY = 0.0f;
+
+        UpdateSceneObjectTransform(animated);
+    }
+}
+
 void DirectXApp::UpdateCamera(float dt) {
     const float moveSpeed = 5.f;
     const float moveStep = moveSpeed * dt;
@@ -1738,6 +1863,7 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
 
     UpdateFallingLights(gt.DeltaTime());
+    UpdateAnimatedObjects(gt.DeltaTime(), gt.TotalTime());
 
     const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
         std::cos(mPitch) * std::sin(mYaw),

@@ -82,6 +82,9 @@ private:
     void BuildMainSrvHeap();
     void BuildLights();
     void UpdateFallingLights(float dt);
+    float ComputeLodAnimationTime(float dt, float totalTime, float distanceToCamera, float& timeAccum, float& stepAccum);
+    void UpdateAnimatedObjects(float dt, float totalTime);
+    void UpdateSceneObjectTransform(SceneObject& obj);
 
     void UpdateCamera(float dt);
 
@@ -146,6 +149,16 @@ private:
         float intensity = 16.0f;
         float range = 10.0f;
         bool settled = false;
+    };
+
+    struct AnimatedObjectTrack {
+        int objectIndex = -1;
+        XMFLOAT3 basePosition = {0.0f, 0.0f, 0.0f};
+        float halfWidth = 2.0f;
+        float speed = 2.2f;
+        float phaseOffset = 0.0f;
+        float timeAccum = 0.0f;
+        float stepAccum = 0.0f;
     };
 
 private:
@@ -266,4 +279,6 @@ private:
     unsigned int mLastOctreeNodesVisited = 0;
     unsigned int mObjectsTestedThisFrame = 0;
     unsigned int mOctreeNodesVisitedThisFrame = 0;
+
+    std::vector<AnimatedObjectTrack> mAnimatedTracks;
 };
