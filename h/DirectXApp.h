@@ -6,13 +6,15 @@
 #include "RenderingSystem.h"
 
 #include <array>
+#include <DirectXCollision.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <filesystem>
 #include <memory>
-#include <wrl.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <wrl.h>
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -50,6 +52,11 @@ public:
     LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
+    struct ModelAsset;
+    struct SceneObject;
+    struct ScenePreset;
+    struct OctreeNode;
+
     bool InitDirect3D();
     void CreateCommandObjects();
     void CreateSwapChain();
@@ -63,6 +70,13 @@ private:
     void LoadTextures();
     void CreateFallbackTextures();
     void BindSubmeshTextures();
+    void BuildScenePresets();
+    void ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources);
+    void RebuildSceneObjectTransforms();
+    void BuildOctree();
+    void CollectVisibleObjects(const XMMATRIX& view, const XMMATRIX& proj);
+    void CollectVisibleFromOctree(const OctreeNode* node, const BoundingFrustum& frustum);
+    void UpdateWindowTitle();
 
     void BuildConstantBuffers();
     void BuildMainSrvHeap();
@@ -78,8 +92,46 @@ private:
     ID3D12Resource* CurrentBackBuffer() const;
 
     D3D12_GPU_DESCRIPTOR_HANDLE GetGpuSrvHandle(unsigned int heapIndex) const;
+    bool ResolveModelPath(const std::vector<std::filesystem::path>& candidates, std::filesystem::path& resolved) const;
 
 private:
+    struct ModelAsset {
+        std::string name;
+        unsigned int submeshStart = 0;
+        unsigned int submeshCount = 0;
+        XMFLOAT3 localBoundsCenter = {0.0f, 0.0f, 0.0f};
+        XMFLOAT3 localBoundsExtents = {1.0f, 1.0f, 1.0f};
+        float localBoundsRadius = 1.0f;
+    };
+
+    struct SceneObject {
+        unsigned int modelAssetIndex = 0;
+        XMFLOAT3 position = {0.0f, 0.0f, 0.0f};
+        XMFLOAT3 scale = {1.0f, 1.0f, 1.0f};
+        float rotationY = 0.0f;
+        XMFLOAT4X4 world = {};
+        XMFLOAT3 worldBoundsCenter = {0.0f, 0.0f, 0.0f};
+        XMFLOAT3 worldBoundsExtents = {1.0f, 1.0f, 1.0f};
+        float worldBoundsRadius = 1.0f;
+        BoundingBox worldBounds = {};
+    };
+
+    struct ScenePreset {
+        std::wstring name;
+        std::vector<SceneObject> objects;
+        XMFLOAT3 cameraPos = {0.0f, 2.0f, -12.0f};
+        float cameraYaw = 0.0f;
+        float cameraPitch = 0.0f;
+    };
+
+    struct OctreeNode {
+        XMFLOAT3 center = {0.0f, 0.0f, 0.0f};
+        XMFLOAT3 extents = {0.0f, 0.0f, 0.0f};
+        std::vector<unsigned int> objectIndices;
+        std::array<std::unique_ptr<OctreeNode>, 8> children;
+        BoundingBox bounds = {};
+    };
+
     struct TextureResource {
         std::wstring path;
         ComPtr<ID3D12Resource> resource;
@@ -153,7 +205,11 @@ private:
     unsigned int mFallbackNormalIndex = 0;
     unsigned int mFallbackDisplacementIndex = 0;
 
-    unsigned int mTextureSrvStart = 3;
+    unsigned int mObjectCbvStart = 0;
+    unsigned int mObjectCbvCount = 0;
+    unsigned int mPassCbvIndex = 0;
+    unsigned int mLightingCbvIndex = 0;
+    unsigned int mTextureSrvStart = 0;
     unsigned int mGBufferSrvStart = 0;
 
     std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
@@ -188,6 +244,26 @@ private:
     float mTexAnimV = 0.0f;
     float mTexScaleU = 1.0f;
     float mTexScaleV = 1.0f;
-    XMFLOAT3 mModelCenter = {0.0f, 0.0f, 0.0f};
     int mLastTitleMode = -1;
+
+    std::vector<ModelAsset> mModelAssets;
+    std::vector<ScenePreset> mScenePresets;
+    std::vector<SceneObject> mSceneObjects;
+    std::vector<unsigned int> mVisibleObjects;
+    std::unique_ptr<OctreeNode> mOctreeRoot;
+
+    bool mFrustumCullingEnabled = true;
+    bool mOctreeCullingEnabled = false;
+    bool mCWasDown = false;
+    bool mOWasDown = false;
+    bool mDigit1WasDown = false;
+    bool mDigit2WasDown = false;
+    bool mDigit3WasDown = false;
+
+    unsigned int mActiveSceneIndex = 0;
+    unsigned int mLastVisibleCount = 0;
+    unsigned int mLastTestedCount = 0;
+    unsigned int mLastOctreeNodesVisited = 0;
+    unsigned int mObjectsTestedThisFrame = 0;
+    unsigned int mOctreeNodesVisitedThisFrame = 0;
 };

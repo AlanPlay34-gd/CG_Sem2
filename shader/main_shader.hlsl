@@ -99,14 +99,16 @@ HSConstants HS_Constants(InputPatch<ControlPoint, 3> patch, uint patchId : SV_Pr
 {
     HSConstants hsc;
 
-    float3 center = (patch[0].PosW + patch[1].PosW + patch[2].PosW) / 3.0f;
-    float distanceToCamera = length(center - gEyePosW);
+    float3 patchCenter = (patch[0].PosW + patch[1].PosW + patch[2].PosW) / 3.0f;
+    float distanceToCamera = length(patchCenter - gEyePosW);
 
-    float tessFactor = max(1.0, min(8.0, lerp(8.0, 1.0, saturate((distanceToCamera - 0.2) / 1.0))));
-    if (gObjectPadding.z > 0.0f)
-    {
-        tessFactor = max(tessFactor, gObjectPadding.z);
-    }
+    // Scene-scale adaptive tessellation:
+    // close patches -> high tess, far patches -> low tess.
+    const float nearDist = 3.0f;
+    const float farDist = 35.0f;
+    float t = saturate((distanceToCamera - nearDist) / (farDist - nearDist));
+    float tessFactor = lerp(14.0f, 1.0f, t);
+    tessFactor = clamp(tessFactor, 1.0f, 14.0f);
 
     hsc.EdgeTess[0] = tessFactor;
     hsc.EdgeTess[1] = tessFactor;
