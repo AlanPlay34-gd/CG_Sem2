@@ -19,12 +19,15 @@ public:
 
     ID3D12RootSignature* GetGeometryRootSignature() const { return mGeometryRootSignature.Get(); }
     ID3D12RootSignature* GetLightingRootSignature() const { return mLightingRootSignature.Get(); }
+    ID3D12RootSignature* GetParticleRootSignature() const { return mParticleRootSignature.Get(); }
 
     ID3D12PipelineState* GetGeometryPSO() const { return mGeometryPSO.Get(); }
     ID3D12PipelineState* GetGeometryWirePSO() const { return mGeometryWirePSO.Get(); }
     ID3D12PipelineState* GetTessellationPSO() const { return mTessellationPSO.Get(); }
     ID3D12PipelineState* GetTessellationWirePSO() const { return mTessellationWirePSO.Get(); }
     ID3D12PipelineState* GetLightingPSO() const { return mLightingPSO.Get(); }
+    ID3D12PipelineState* GetParticlePSO() const { return mParticlePSO.Get(); }
+    ID3D12PipelineState* GetParticleComputePSO() const { return mParticleComputePSO.Get(); }
 
     GBuffer* GetGBuffer() const { return mGBuffer.get(); }
 
@@ -41,12 +44,15 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mGeometryRootSignature;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> mLightingRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> mParticleRootSignature;
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mGeometryPSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mGeometryWirePSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mTessellationPSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mTessellationWirePSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mLightingPSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mParticlePSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mParticleComputePSO;
 
     std::unique_ptr<GBuffer> mGBuffer;
 };

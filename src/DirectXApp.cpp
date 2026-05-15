@@ -13,6 +13,7 @@
 #include <cmath>
 #include <array>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -480,6 +481,16 @@ DirectXApp::~DirectXApp() {
     mSceneMesh = {};
     mLights.clear();
     mFallingLights.clear();
+    for (auto& buffer : mParticleBuffers) {
+        buffer.Reset();
+    }
+    for (auto& counter : mParticleCounters) {
+        counter.Reset();
+    }
+    mParticleCounterResetUpload.Reset();
+    mParticleCounterReadback.Reset();
+    mParticleSimCB.reset();
+    mParticleRenderCB.reset();
 
     mVertexBufferUploader.Reset();
     mIndexBufferUploader.Reset();
@@ -751,9 +762,11 @@ void DirectXApp::BuildScene() {
     ActivateScene(0, false);
 
     BuildConstantBuffers();
+    InitializeParticleResources();
     BuildMainSrvHeap();
     BindSubmeshTextures();
     BuildLights();
+    ResetParticlesForActiveScene();
 
     ThrowIfFailed(mCommandList->Close(), "Close command list failed");
     ID3D12CommandList* cmdLists[] = {mCommandList.Get()};
@@ -947,6 +960,32 @@ void DirectXApp::BuildScenePresets() {
         }
     }
     mScenePresets.push_back(lab4Scene);
+
+    ScenePreset lab5ParticlesScene;
+    lab5ParticlesScene.name = L"Scene 4: Lab 5 Particles";
+    lab5ParticlesScene.cameraPos = XMFLOAT3(0.0f, 3.5f, -14.0f);
+    lab5ParticlesScene.cameraYaw = 0.0f;
+    lab5ParticlesScene.cameraPitch = -0.05f;
+    {
+        SceneObject earthCenter;
+        earthCenter.modelAssetIndex = earthModel;
+        earthCenter.position = XMFLOAT3(0.0f, 0.6f, 0.0f);
+        earthCenter.scale = XMFLOAT3(1.0f, 1.0f, 1.0f);
+        lab5ParticlesScene.objects.push_back(earthCenter);
+
+        SceneObject earthLeft;
+        earthLeft.modelAssetIndex = earthModel;
+        earthLeft.position = XMFLOAT3(-5.0f, 0.5f, 2.2f);
+        earthLeft.scale = XMFLOAT3(0.45f, 0.45f, 0.45f);
+        lab5ParticlesScene.objects.push_back(earthLeft);
+
+        SceneObject earthRight;
+        earthRight.modelAssetIndex = earthModel;
+        earthRight.position = XMFLOAT3(5.3f, 0.5f, -1.8f);
+        earthRight.scale = XMFLOAT3(0.45f, 0.45f, 0.45f);
+        lab5ParticlesScene.objects.push_back(earthRight);
+    }
+    mScenePresets.push_back(lab5ParticlesScene);
 }
 
 void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources) {
@@ -994,9 +1033,11 @@ void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources
         // Scene 2: animate two nearby planets.
         addTrack(earthIndices[0], 2.0f, 2.2f, 0.0f);
         addTrack(earthIndices[1], 2.0f, 2.2f, 1.15f);
-    } else if (!earthIndices.empty()) {
+    } else if (mActiveSceneIndex != 3u && !earthIndices.empty()) {
         addTrack(earthIndices[0], (mActiveSceneIndex == 2u) ? 3.0f : 2.0f, 2.2f, 0.0f);
     }
+
+    ResetParticlesForActiveScene();
 
     RebuildSceneObjectTransforms();
     BuildOctree();
@@ -1272,8 +1313,11 @@ void DirectXApp::UpdateWindowTitle() {
         ws << L" | OctNodes " << mLastOctreeNodesVisited;
     }
 
-    ws << L" | Scene: [1-3]";
+    ws << L" | Scene: [1-4]";
     ws << L" | Lab4 Debug: C/O";
+    if (mActiveSceneIndex == 3u) {
+        ws << L" | Lab5: Particles";
+    }
     SetWindowTextW(mHwnd, ws.str().c_str());
 }
 
@@ -1436,6 +1480,8 @@ void DirectXApp::BuildConstantBuffers() {
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(mDevice.Get(), mObjectCbvCount, true);
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(mDevice.Get(), 1, true);
     mLightingCB = std::make_unique<UploadBuffer<LightingConstants>>(mDevice.Get(), LightingCbElementCount, true);
+    mParticleSimCB = std::make_unique<UploadBuffer<ParticleSimConstants>>(mDevice.Get(), 1, true);
+    mParticleRenderCB = std::make_unique<UploadBuffer<ParticleRenderConstants>>(mDevice.Get(), 1, true);
 }
 
 void DirectXApp::BuildMainSrvHeap() {
@@ -1445,8 +1491,11 @@ void DirectXApp::BuildMainSrvHeap() {
     mLightingCbvIndex = mPassCbvIndex + 1;
     mTextureSrvStart = mLightingCbvIndex + 1;
     mGBufferSrvStart = mTextureSrvStart + textureCount;
+    mParticleSrvStart = mGBufferSrvStart + GBuffer::Count;
+    mParticleUavStart = mParticleSrvStart + ParticleBufferCount;
 
-    const unsigned int descriptorCount = mObjectCbvCount + 2 + textureCount + GBuffer::Count;
+    const unsigned int descriptorCount =
+        mObjectCbvCount + 2 + textureCount + GBuffer::Count + ParticleBufferCount + ParticleBufferCount;
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
     heapDesc.NumDescriptors = descriptorCount;
@@ -1504,6 +1553,48 @@ void DirectXApp::BuildMainSrvHeap() {
         gbufferCpu,
         gbufferGpu,
         mCbvSrvUavDescriptorSize);
+
+    for (unsigned int i = 0; i < ParticleBufferCount; ++i) {
+        if (!mParticleBuffers[i]) {
+            continue;
+        }
+
+        const unsigned int srvIndex = mParticleSrvStart + i;
+        CD3DX12_CPU_DESCRIPTOR_HANDLE particleSrvHandle(
+            mCbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(srvIndex),
+            mCbvSrvUavDescriptorSize);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement = 0;
+        srvDesc.Buffer.NumElements = mParticleMaxCount;
+        srvDesc.Buffer.StructureByteStride = sizeof(ParticleGpu);
+        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        mDevice->CreateShaderResourceView(mParticleBuffers[i].Get(), &srvDesc, particleSrvHandle);
+
+        const unsigned int uavIndex = mParticleUavStart + i;
+        CD3DX12_CPU_DESCRIPTOR_HANDLE particleUavHandle(
+            mCbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(uavIndex),
+            mCbvSrvUavDescriptorSize);
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.FirstElement = 0;
+        uavDesc.Buffer.NumElements = mParticleMaxCount;
+        uavDesc.Buffer.StructureByteStride = sizeof(ParticleGpu);
+        uavDesc.Buffer.CounterOffsetInBytes = 0;
+        uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+        mDevice->CreateUnorderedAccessView(
+            mParticleBuffers[i].Get(),
+            mParticleCounters[i].Get(),
+            &uavDesc,
+            particleUavHandle);
+    }
 }
 
 void DirectXApp::BindSubmeshTextures() {
@@ -1577,7 +1668,7 @@ void DirectXApp::UpdateFallingLights(float dt) {
 
     static std::mt19937 rng{1337u};
     std::uniform_real_distribution<float> xzDist(-14.0f, 14.0f);
-    std::uniform_real_distribution<float> colorDist(0.4f, 1.0f);
+    std::uniform_real_distribution<float> colorDist(0.4f, 0.8f);
     std::uniform_real_distribution<float> speedDist(1.2f, 2.6f);
     std::uniform_real_distribution<float> rangeDist(6.0f, 12.0f);
 
@@ -1618,6 +1709,260 @@ void DirectXApp::UpdateFallingLights(float dt) {
             return light.intensity <= 0.2f || light.range <= 0.8f;
         }),
         mFallingLights.end());
+}
+
+void DirectXApp::InitializeParticleResources() {
+    const UINT64 particleBufferBytes = static_cast<UINT64>(mParticleMaxCount) * sizeof(ParticleGpu);
+    constexpr UINT64 counterBytes = 4096;
+
+    for (unsigned int i = 0; i < ParticleBufferCount; ++i) {
+        const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC particleDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            particleBufferBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+        ThrowIfFailed(mDevice->CreateCommittedResource(
+            &defaultHeapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &particleDesc,
+            D3D12_RESOURCE_STATE_COMMON,
+            nullptr,
+            IID_PPV_ARGS(&mParticleBuffers[i])),
+            "Create particle structured buffer failed");
+
+        const CD3DX12_RESOURCE_DESC counterDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            counterBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ThrowIfFailed(mDevice->CreateCommittedResource(
+            &defaultHeapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &counterDesc,
+            D3D12_RESOURCE_STATE_COMMON,
+            nullptr,
+            IID_PPV_ARGS(&mParticleCounters[i])),
+            "Create particle counter buffer failed");
+
+        mParticleBufferStates[i] = D3D12_RESOURCE_STATE_COMMON;
+        mParticleCounterStates[i] = D3D12_RESOURCE_STATE_COMMON;
+    }
+
+    {
+        const CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+        const CD3DX12_RESOURCE_DESC uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(counterBytes);
+        ThrowIfFailed(mDevice->CreateCommittedResource(
+            &uploadHeapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &uploadDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&mParticleCounterResetUpload)),
+            "Create particle reset upload buffer failed");
+
+        void* mapped = nullptr;
+        D3D12_RANGE readRange = {0, 0};
+        ThrowIfFailed(mParticleCounterResetUpload->Map(0, &readRange, &mapped), "Map particle reset upload failed");
+        std::memset(mapped, 0, static_cast<size_t>(counterBytes));
+        D3D12_RANGE written = {0, static_cast<SIZE_T>(counterBytes)};
+        mParticleCounterResetUpload->Unmap(0, &written);
+    }
+
+    {
+        const CD3DX12_HEAP_PROPERTIES readbackHeapProps(D3D12_HEAP_TYPE_READBACK);
+        const CD3DX12_RESOURCE_DESC readbackDesc = CD3DX12_RESOURCE_DESC::Buffer(counterBytes);
+        ThrowIfFailed(mDevice->CreateCommittedResource(
+            &readbackHeapProps,
+            D3D12_HEAP_FLAG_NONE,
+            &readbackDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&mParticleCounterReadback)),
+            "Create particle readback buffer failed");
+    }
+
+    mParticleSourceIndexA = true;
+    mParticleAliveCount = 0;
+    mParticleSpawnCount = 0;
+    mParticleReadbackValid = false;
+}
+
+void DirectXApp::ResetParticlesForActiveScene() {
+    mParticleSpawnAccumulator = 0.0f;
+    mParticleAliveCount = 0;
+    mParticleSpawnCount = 0;
+    mParticleSourceIndexA = true;
+    mParticleReadbackValid = false;
+
+    if (mActiveSceneIndex != 3u || mSceneObjects.empty()) {
+        return;
+    }
+
+    const SceneObject& anchor = mSceneObjects[0];
+    mParticleEmitterPos = XMFLOAT3(
+        anchor.position.x,
+        anchor.position.y + 4.5f,
+        anchor.position.z);
+}
+
+void DirectXApp::UpdateParticleCounterFromReadback() {
+    if (!mParticleCounterReadback || !mParticleReadbackValid) {
+        return;
+    }
+
+    void* mapped = nullptr;
+    D3D12_RANGE readRange = {0, sizeof(unsigned int)};
+    if (SUCCEEDED(mParticleCounterReadback->Map(0, &readRange, &mapped)) && mapped) {
+        const auto* counterPtr = reinterpret_cast<const unsigned int*>(mapped);
+        mParticleAliveCount = (std::min)(*counterPtr, mParticleMaxCount);
+        D3D12_RANGE writeRange = {0, 0};
+        mParticleCounterReadback->Unmap(0, &writeRange);
+    }
+}
+
+void DirectXApp::UpdateParticles(float dt, float totalTime) {
+    mParticleSpawnCount = 0;
+    if (!mParticleSimCB) {
+        return;
+    }
+
+    if (mActiveSceneIndex != 3u) {
+        mParticleAliveCount = 0;
+        mParticleSpawnAccumulator = 0.0f;
+        mParticleReadbackValid = false;
+        return;
+    }
+
+    UpdateParticleCounterFromReadback();
+    constexpr float kSpawnRate = 260.0f;
+    mParticleSpawnAccumulator += dt * kSpawnRate;
+    mParticleSpawnCount = static_cast<unsigned int>(mParticleSpawnAccumulator);
+    mParticleSpawnAccumulator -= static_cast<float>(mParticleSpawnCount);
+
+    if (mParticleAliveCount >= mParticleMaxCount) {
+        mParticleSpawnCount = 0;
+    } else {
+        const unsigned int freeCount = mParticleMaxCount - mParticleAliveCount;
+        mParticleSpawnCount = (std::min)(mParticleSpawnCount, freeCount);
+    }
+
+    ParticleSimConstants sim = {};
+    sim.Dt = dt;
+    sim.TotalTime = totalTime;
+    sim.AliveCount = mParticleAliveCount;
+    sim.SpawnCount = mParticleSpawnCount;
+    sim.EmitterPos = mParticleEmitterPos;
+    sim.BaseSize = 0.18f;
+    sim.EmitterVelocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
+    sim.Gravity = 3.2f;
+    sim.LifeMin = 1.1f;
+    sim.LifeMax = 2.2f;
+    sim.SpeedMin = 1.0f;
+    sim.SpeedMax = 3.1f;
+    sim.MaxParticles = mParticleMaxCount;
+    mParticleSimCB->CopyData(0, sim);
+}
+
+void DirectXApp::ExecuteParticleSimulation(ID3D12GraphicsCommandList* cmdList) {
+    if (mActiveSceneIndex != 3u) {
+        return;
+    }
+    if (!cmdList || !mParticleSimCB || !mParticleBuffers[0] || !mParticleBuffers[1] ||
+        !mParticleCounters[0] || !mParticleCounters[1] || !mParticleCounterResetUpload || !mParticleCounterReadback) {
+        return;
+    }
+
+    const unsigned int sourceIndex = mParticleSourceIndexA ? 0u : 1u;
+    const unsigned int destIndex = 1u - sourceIndex;
+
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES& state, D3D12_RESOURCE_STATES newState) {
+        if (!resource || state == newState) {
+            return;
+        }
+        auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource, state, newState);
+        cmdList->ResourceBarrier(1, &barrier);
+        state = newState;
+    };
+
+    transition(mParticleCounters[destIndex].Get(), mParticleCounterStates[destIndex], D3D12_RESOURCE_STATE_COPY_DEST);
+    cmdList->CopyBufferRegion(mParticleCounters[destIndex].Get(), 0, mParticleCounterResetUpload.Get(), 0, sizeof(unsigned int));
+
+    transition(mParticleBuffers[sourceIndex].Get(), mParticleBufferStates[sourceIndex], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(mParticleBuffers[destIndex].Get(), mParticleBufferStates[destIndex], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(mParticleCounters[sourceIndex].Get(), mParticleCounterStates[sourceIndex], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    transition(mParticleCounters[destIndex].Get(), mParticleCounterStates[destIndex], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+    const unsigned int workItemCount = (std::max)(mParticleAliveCount, mParticleSpawnCount);
+    if (workItemCount == 0u) {
+        transition(mParticleCounters[destIndex].Get(), mParticleCounterStates[destIndex], D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmdList->CopyBufferRegion(mParticleCounterReadback.Get(), 0, mParticleCounters[destIndex].Get(), 0, sizeof(unsigned int));
+        transition(mParticleCounters[destIndex].Get(), mParticleCounterStates[destIndex], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        mParticleReadbackValid = true;
+        mParticleSourceIndexA = (destIndex == 0u);
+        return;
+    }
+
+    cmdList->SetComputeRootSignature(mRenderingSystem->GetParticleRootSignature());
+    cmdList->SetPipelineState(mRenderingSystem->GetParticleComputePSO());
+    cmdList->SetComputeRootDescriptorTable(0, GetGpuSrvHandle(mParticleSrvStart + sourceIndex));
+    cmdList->SetComputeRootDescriptorTable(1, GetGpuSrvHandle(mParticleUavStart + sourceIndex));
+    cmdList->SetComputeRootDescriptorTable(2, GetGpuSrvHandle(mParticleUavStart + destIndex));
+    cmdList->SetComputeRootConstantBufferView(3, mParticleSimCB->Resource()->GetGPUVirtualAddress());
+
+    const unsigned int groupsX = (workItemCount + 255u) / 256u;
+    cmdList->Dispatch(groupsX, 1, 1);
+
+    D3D12_RESOURCE_BARRIER uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(mParticleBuffers[destIndex].Get());
+    cmdList->ResourceBarrier(1, &uavBarrier);
+
+    transition(mParticleCounters[destIndex].Get(), mParticleCounterStates[destIndex], D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cmdList->CopyBufferRegion(mParticleCounterReadback.Get(), 0, mParticleCounters[destIndex].Get(), 0, sizeof(unsigned int));
+    transition(mParticleCounters[destIndex].Get(), mParticleCounterStates[destIndex], D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    mParticleReadbackValid = true;
+
+    mParticleSourceIndexA = (destIndex == 0u);
+}
+
+void DirectXApp::DrawParticles(ID3D12GraphicsCommandList* cmdList,
+                               const XMMATRIX& view,
+                               const XMMATRIX& proj,
+                               D3D12_CPU_DESCRIPTOR_HANDLE rtv,
+                               D3D12_CPU_DESCRIPTOR_HANDLE dsv) {
+    if (mActiveSceneIndex != 3u || mParticleAliveCount == 0u || !cmdList || !mParticleRenderCB) {
+        return;
+    }
+
+    const unsigned int sourceIndex = mParticleSourceIndexA ? 0u : 1u;
+    auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES& state, D3D12_RESOURCE_STATES newState) {
+        if (!resource || state == newState) {
+            return;
+        }
+        auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(resource, state, newState);
+        cmdList->ResourceBarrier(1, &barrier);
+        state = newState;
+    };
+    transition(mParticleBuffers[sourceIndex].Get(), mParticleBufferStates[sourceIndex], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
+        std::cos(mPitch) * std::sin(mYaw),
+        std::sin(mPitch),
+        std::cos(mPitch) * std::cos(mYaw),
+        0.0f));
+    const XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    const XMVECTOR right = XMVector3Normalize(XMVector3Cross(worldUp, forward));
+    const XMVECTOR up = XMVector3Normalize(XMVector3Cross(forward, right));
+
+    ParticleRenderConstants render = {};
+    XMStoreFloat4x4(&render.ViewProj, XMMatrixTranspose(view * proj));
+    XMStoreFloat3(&render.CameraRight, right);
+    XMStoreFloat3(&render.CameraUp, up);
+    render.RenderSizeScale = 1.0f;
+    render.AlphaDiscard = 0.5f;
+    mParticleRenderCB->CopyData(0, render);
+
+    cmdList->OMSetRenderTargets(1, &rtv, TRUE, &dsv);
+    cmdList->SetPipelineState(mRenderingSystem->GetParticlePSO());
+    cmdList->SetGraphicsRootSignature(mRenderingSystem->GetParticleRootSignature());
+    cmdList->SetGraphicsRootDescriptorTable(0, GetGpuSrvHandle(mParticleSrvStart + sourceIndex));
+    cmdList->SetGraphicsRootConstantBufferView(4, mParticleRenderCB->Resource()->GetGPUVirtualAddress());
+    cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_POINTLIST);
+    cmdList->DrawInstanced(mParticleAliveCount, 1, 0, 0);
 }
 
 float DirectXApp::ComputeLodAnimationTime(float dt, float totalTime, float distanceToCamera, float& timeAccum, float& stepAccum) {
@@ -1737,6 +2082,7 @@ void DirectXApp::Update(const GameTimer& gt) {
     const bool digit1Down = (GetAsyncKeyState('1') & 0x8000) != 0;
     const bool digit2Down = (GetAsyncKeyState('2') & 0x8000) != 0;
     const bool digit3Down = (GetAsyncKeyState('3') & 0x8000) != 0;
+    const bool digit4Down = (GetAsyncKeyState('4') & 0x8000) != 0;
     bool titleDirty = false;
 
     if (f1Down && !mF1WasDown) {
@@ -1818,6 +2164,12 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
     mDigit3WasDown = digit3Down;
 
+    if (digit4Down && !mDigit4WasDown) {
+        ActivateScene(3, true);
+        titleDirty = true;
+    }
+    mDigit4WasDown = digit4Down;
+
     auto clampTiling = [](float v) {
         return std::clamp(v, 0.10f, 16.0f);
     };
@@ -1864,6 +2216,7 @@ void DirectXApp::Update(const GameTimer& gt) {
 
     UpdateFallingLights(gt.DeltaTime());
     UpdateAnimatedObjects(gt.DeltaTime(), gt.TotalTime());
+    UpdateParticles(gt.DeltaTime(), gt.TotalTime());
 
     const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
         std::cos(mPitch) * std::sin(mYaw),
@@ -1959,6 +2312,22 @@ void DirectXApp::Draw(const GameTimer&) {
 
     ID3D12DescriptorHeap* descriptorHeaps[] = {mCbvSrvHeap.Get()};
     mCommandList->SetDescriptorHeaps(1, descriptorHeaps);
+
+    const XMVECTOR forward = XMVector3Normalize(XMVectorSet(
+        std::cos(mPitch) * std::sin(mYaw),
+        std::sin(mPitch),
+        std::cos(mPitch) * std::cos(mYaw),
+        0.0f));
+    const XMVECTOR eye = XMLoadFloat3(&mEyePos);
+    const XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    const XMMATRIX view = XMMatrixLookToLH(eye, forward, up);
+    const XMMATRIX proj = XMMatrixPerspectiveFovLH(
+        0.25f * XM_PI,
+        static_cast<float>(mClientWidth) / static_cast<float>(mClientHeight),
+        0.1f,
+        5000.0f);
+
+    ExecuteParticleSimulation(mCommandList.Get());
 
     auto* gbuffer = mRenderingSystem->GetGBuffer();
 
@@ -2109,6 +2478,8 @@ void DirectXApp::Draw(const GameTimer&) {
         mCommandList->DrawInstanced(3, 1, 0, 0);
         ++lightCbIndex;
     }
+
+    DrawParticles(mCommandList.Get(), view, proj, rtv, dsv);
 
     auto bbToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         CurrentBackBuffer(),

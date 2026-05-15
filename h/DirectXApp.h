@@ -36,6 +36,35 @@ struct PassConstants {
     XMFLOAT4 AmbientColor = {0.08f, 0.08f, 0.1f, 1.0f};
 };
 
+struct ParticleSimConstants {
+    float Dt = 0.0f;
+    float TotalTime = 0.0f;
+    unsigned int AliveCount = 0;
+    unsigned int SpawnCount = 0;
+
+    XMFLOAT3 EmitterPos = {0.0f, 2.0f, 0.0f};
+    float BaseSize = 0.16f;
+
+    XMFLOAT3 EmitterVelocity = {0.0f, 0.0f, 0.0f};
+    float Gravity = 3.2f;
+
+    float LifeMin = 1.1f;
+    float LifeMax = 2.2f;
+    float SpeedMin = 1.2f;
+    float SpeedMax = 3.0f;
+
+    unsigned int MaxParticles = 0;
+    XMFLOAT3 Padding0 = {0.0f, 0.0f, 0.0f};
+};
+
+struct ParticleRenderConstants {
+    XMFLOAT4X4 ViewProj = {};
+    XMFLOAT3 CameraRight = {1.0f, 0.0f, 0.0f};
+    float RenderSizeScale = 1.0f;
+    XMFLOAT3 CameraUp = {0.0f, 1.0f, 0.0f};
+    float AlphaDiscard = 0.5f;
+};
+
 class GameTimer;
 
 class DirectXApp {
@@ -52,6 +81,16 @@ public:
     LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 private:
+    struct ParticleGpu {
+        XMFLOAT3 Position = {0.0f, 0.0f, 0.0f};
+        float Size = 0.16f;
+        XMFLOAT3 Velocity = {0.0f, 0.0f, 0.0f};
+        float Age = 0.0f;
+        XMFLOAT4 Color = {1.0f, 1.0f, 1.0f, 1.0f};
+        float Lifetime = 1.0f;
+        XMFLOAT3 Padding = {0.0f, 0.0f, 0.0f};
+    };
+
     struct ModelAsset;
     struct SceneObject;
     struct ScenePreset;
@@ -84,6 +123,13 @@ private:
     void UpdateFallingLights(float dt);
     float ComputeLodAnimationTime(float dt, float totalTime, float distanceToCamera, float& timeAccum, float& stepAccum);
     void UpdateAnimatedObjects(float dt, float totalTime);
+    void InitializeParticleResources();
+    void ResetParticlesForActiveScene();
+    void UpdateParticles(float dt, float totalTime);
+    void ExecuteParticleSimulation(ID3D12GraphicsCommandList* cmdList);
+    void DrawParticles(ID3D12GraphicsCommandList* cmdList, const XMMATRIX& view, const XMMATRIX& proj,
+                       D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv);
+    void UpdateParticleCounterFromReadback();
     void UpdateSceneObjectTransform(SceneObject& obj);
 
     void UpdateCamera(float dt);
@@ -224,6 +270,8 @@ private:
     unsigned int mLightingCbvIndex = 0;
     unsigned int mTextureSrvStart = 0;
     unsigned int mGBufferSrvStart = 0;
+    unsigned int mParticleSrvStart = 0;
+    unsigned int mParticleUavStart = 0;
 
     std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB;
@@ -272,6 +320,7 @@ private:
     bool mDigit1WasDown = false;
     bool mDigit2WasDown = false;
     bool mDigit3WasDown = false;
+    bool mDigit4WasDown = false;
 
     unsigned int mActiveSceneIndex = 0;
     unsigned int mLastVisibleCount = 0;
@@ -281,4 +330,30 @@ private:
     unsigned int mOctreeNodesVisitedThisFrame = 0;
 
     std::vector<AnimatedObjectTrack> mAnimatedTracks;
+
+    static constexpr unsigned int ParticleBufferCount = 2;
+    unsigned int mParticleMaxCount = 1056;
+
+    std::array<ComPtr<ID3D12Resource>, ParticleBufferCount> mParticleBuffers;
+    std::array<ComPtr<ID3D12Resource>, ParticleBufferCount> mParticleCounters;
+    std::array<D3D12_RESOURCE_STATES, ParticleBufferCount> mParticleBufferStates = {
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_COMMON
+    };
+    std::array<D3D12_RESOURCE_STATES, ParticleBufferCount> mParticleCounterStates = {
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_COMMON
+    };
+    ComPtr<ID3D12Resource> mParticleCounterResetUpload;
+    ComPtr<ID3D12Resource> mParticleCounterReadback;
+
+    std::unique_ptr<UploadBuffer<ParticleSimConstants>> mParticleSimCB;
+    std::unique_ptr<UploadBuffer<ParticleRenderConstants>> mParticleRenderCB;
+
+    bool mParticleSourceIndexA = true;
+    unsigned int mParticleAliveCount = 0;
+    unsigned int mParticleSpawnCount = 0;
+    bool mParticleReadbackValid = false;
+    float mParticleSpawnAccumulator = 0.0f;
+    XMFLOAT3 mParticleEmitterPos = {0.0f, 0.0f, 0.0f};
 };
