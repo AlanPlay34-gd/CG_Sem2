@@ -55,6 +55,12 @@ struct ParticleSimConstants {
 
     unsigned int MaxParticles = 0;
     XMFLOAT3 Padding0 = {0.0f, 0.0f, 0.0f};
+
+    XMFLOAT3 CollisionCenter = {0.0f, 0.0f, 0.0f};
+    float CollisionRadius = 0.0f;
+
+    float Restitution = 0.55f;
+    XMFLOAT3 Padding1 = {0.0f, 0.0f, 0.0f};
 };
 
 struct ParticleRenderConstants {

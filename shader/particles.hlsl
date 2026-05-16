@@ -33,6 +33,12 @@ cbuffer ParticleSimConstants : register(b0)
 
     uint gMaxParticles;
     float3 gPad0;
+
+    float3 gCollisionCenter;
+    float gCollisionRadius;
+
+    float gRestitution;
+    float3 gPad1;
 };
 
 cbuffer ParticleRenderConstants : register(b1)
@@ -51,14 +57,14 @@ float Hash01(uint n)
     return frac((float)nn * (1.0f / 4294967296.0f));
 }
 
-float3 BuildSpawnDirection(uint seed)
+float3 BuildSpawnDirection(uint seed, float3 baseDir)
 {
     float rx = Hash01(seed * 3u + 11u) * 2.0f - 1.0f;
-    float ry = Hash01(seed * 3u + 17u);
+    float ry = Hash01(seed * 3u + 17u) * 2.0f - 1.0f;
     float rz = Hash01(seed * 3u + 23u) * 2.0f - 1.0f;
 
-    float3 d = float3(rx, ry * 1.25f + 0.35f, rz);
-    return normalize(d);
+    float3 jitter = normalize(float3(rx, ry, rz));
+    return normalize(baseDir * 1.7f + jitter * 0.7f);
 }
 
 [numthreads(256, 1, 1)]
@@ -73,7 +79,27 @@ void CS_UpdateParticles(uint3 dispatchThreadId : SV_DispatchThreadID)
         p.Velocity.y -= gGravity * gDt;
         p.Position += p.Velocity * gDt;
 
-        if (p.Age < p.Lifetime && p.Position.y > -3.0f)
+        if (gCollisionRadius > 0.0f)
+        {
+            const float particleRadius = max(p.Size * 0.95f, 0.01f);
+            const float3 fromCenter = p.Position - gCollisionCenter;
+            const float dist = length(fromCenter);
+            const float collideDist = gCollisionRadius + particleRadius;
+
+            if (dist < collideDist)
+            {
+                const float3 n = (dist > 1e-5f) ? (fromCenter / dist) : float3(0.0f, 1.0f, 0.0f);
+                p.Position = gCollisionCenter + n * collideDist;
+
+                const float vn = dot(p.Velocity, n);
+                if (vn < 0.0f)
+                {
+                    p.Velocity = p.Velocity - (1.0f + gRestitution) * vn * n;
+                }
+            }
+        }
+
+        if (p.Age < p.Lifetime && p.Position.y > -20.0f)
         {
             gAppendParticles.Append(p);
         }
@@ -86,7 +112,18 @@ void CS_UpdateParticles(uint3 dispatchThreadId : SV_DispatchThreadID)
         ParticleGpu p;
         p.Position = gEmitterPos;
 
-        const float3 dir = BuildSpawnDirection(seed);
+        float3 baseDir = float3(0.0f, -1.0f, 0.0f);
+        if (gCollisionRadius > 0.0f)
+        {
+            const float3 toCenter = gCollisionCenter - gEmitterPos;
+            const float lenToCenter = length(toCenter);
+            if (lenToCenter > 1e-5f)
+            {
+                baseDir = toCenter / lenToCenter;
+            }
+        }
+
+        const float3 dir = BuildSpawnDirection(seed, baseDir);
         const float speedT = Hash01(seed * 5u + 101u);
         const float speed = lerp(gSpeedMin, gSpeedMax, speedT);
         p.Velocity = dir * speed + gEmitterVelocity;

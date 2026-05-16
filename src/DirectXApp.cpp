@@ -1795,9 +1795,12 @@ void DirectXApp::ResetParticlesForActiveScene() {
     }
 
     const SceneObject& anchor = mSceneObjects[0];
+    const ModelAsset& model = mModelAssets[anchor.modelAssetIndex];
+    const float objectScale = (std::max)(anchor.scale.x, (std::max)(anchor.scale.y, anchor.scale.z));
+    const float planetRadius = model.localBoundsRadius * objectScale;
     mParticleEmitterPos = XMFLOAT3(
         anchor.position.x,
-        anchor.position.y + 4.5f,
+        anchor.position.y + planetRadius + 0.04f,
         anchor.position.z);
 }
 
@@ -1849,13 +1852,33 @@ void DirectXApp::UpdateParticles(float dt, float totalTime) {
     sim.SpawnCount = mParticleSpawnCount;
     sim.EmitterPos = mParticleEmitterPos;
     sim.BaseSize = 0.18f;
-    sim.EmitterVelocity = XMFLOAT3(0.0f, 0.0f, 0.0f);
-    sim.Gravity = 3.2f;
-    sim.LifeMin = 1.1f;
-    sim.LifeMax = 2.2f;
-    sim.SpeedMin = 1.0f;
-    sim.SpeedMax = 3.1f;
+    sim.EmitterVelocity = XMFLOAT3(0.0f, -0.8f, 0.0f);
+    sim.Gravity = 8.2f;
+    sim.LifeMin = 2.4f;
+    sim.LifeMax = 4.4f;
+    sim.SpeedMin = 2.0f;
+    sim.SpeedMax = 4.5f;
     sim.MaxParticles = mParticleMaxCount;
+
+    if (!mSceneObjects.empty()) {
+        const SceneObject& planet = mSceneObjects[0];
+        const ModelAsset& model = mModelAssets[planet.modelAssetIndex];
+        const float objectScale = (std::max)(planet.scale.x, (std::max)(planet.scale.y, planet.scale.z));
+        const float planetRadius = model.localBoundsRadius * objectScale;
+
+        sim.CollisionCenter = planet.position;
+        sim.CollisionRadius = planetRadius * 1.0f;
+        mParticleEmitterPos = XMFLOAT3(
+            sim.CollisionCenter.x,
+            sim.CollisionCenter.y + sim.CollisionRadius + 0.04f,
+            sim.CollisionCenter.z);
+        sim.EmitterPos = mParticleEmitterPos;
+    } else {
+        sim.CollisionCenter = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        sim.CollisionRadius = 0.0f;
+    }
+    sim.Restitution = 1.12f;
+
     mParticleSimCB->CopyData(0, sim);
 }
 
