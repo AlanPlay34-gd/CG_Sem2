@@ -40,6 +40,7 @@ set(SHADER_FILES
     shader/main_shader.hlsl
     shader/lighting.hlsl
     shader/particles.hlsl
+    shader/shadow.hlsl
 )
 
 add_executable(CG_Sem2 WIN32

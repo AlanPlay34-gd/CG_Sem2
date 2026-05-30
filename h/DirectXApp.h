@@ -30,10 +30,25 @@ struct ObjectConstants {
 };
 
 struct PassConstants {
+    XMFLOAT4X4 View = {};
     XMFLOAT4X4 InvViewProj = {};
     XMFLOAT3 EyePosW = {0.0f, 0.0f, 0.0f};
     float Padding = 0.0f;
-    XMFLOAT4 AmbientColor = {0.08f, 0.08f, 0.1f, 1.0f};
+    XMFLOAT4 AmbientColor = {0.0f, 0.0f, 0.0f, 1.0f};
+};
+
+struct ShadowPassConstants {
+    XMFLOAT4X4 LightViewProj = {};
+};
+
+struct ShadowConstants {
+    XMFLOAT4X4 LightViewProj[4] = {};
+    XMFLOAT4 CascadeSplits = {0.0f, 0.0f, 0.0f, 0.0f};
+    XMFLOAT3 LightDirection = {0.0f, -1.0f, 0.0f};
+    float ShadowStrength = 1.0f;
+    float DepthBias = 0.0012f;
+    float NormalBias = 0.0035f;
+    XMFLOAT2 Padding = {0.0f, 0.0f};
 };
 
 struct ParticleSimConstants {
@@ -124,6 +139,7 @@ private:
     void UpdateWindowTitle();
 
     void BuildConstantBuffers();
+    void BuildShadowResources();
     void BuildMainSrvHeap();
     void BuildLights();
     void UpdateFallingLights(float dt);
@@ -137,6 +153,8 @@ private:
                        D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv);
     void UpdateParticleCounterFromReadback();
     void UpdateSceneObjectTransform(SceneObject& obj);
+    void UpdateShadowCascades(const XMMATRIX& view);
+    void RenderShadowMaps(const XMMATRIX& view);
 
     void UpdateCamera(float dt);
 
@@ -144,6 +162,7 @@ private:
 
     D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
     D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE ShadowCascadeDsv(unsigned int cascadeIndex) const;
     ID3D12Resource* CurrentBackBuffer() const;
 
     D3D12_GPU_DESCRIPTOR_HANDLE GetGpuSrvHandle(unsigned int heapIndex) const;
@@ -216,6 +235,8 @@ private:
 private:
     static constexpr unsigned int SwapChainBufferCount = 2;
     static constexpr unsigned int LightingCbElementCount = 2048;
+    static constexpr unsigned int ShadowCascadeCount = 4;
+    static constexpr unsigned int ShadowMapSize = 2048;
 
     HWND mHwnd = nullptr;
     unsigned int mClientWidth = 1280;
@@ -276,15 +297,26 @@ private:
     unsigned int mLightingCbvIndex = 0;
     unsigned int mTextureSrvStart = 0;
     unsigned int mGBufferSrvStart = 0;
+    unsigned int mShadowSrvIndex = 0;
     unsigned int mParticleSrvStart = 0;
     unsigned int mParticleUavStart = 0;
 
     std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB;
     std::unique_ptr<UploadBuffer<LightingConstants>> mLightingCB;
+    std::unique_ptr<UploadBuffer<ShadowPassConstants>> mShadowPassCB;
+    std::unique_ptr<UploadBuffer<ShadowConstants>> mShadowCB;
 
     std::vector<LightData> mLights;
     std::vector<FallingLight> mFallingLights;
+
+    ComPtr<ID3D12Resource> mShadowMap;
+    D3D12_RESOURCE_STATES mShadowMapState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    std::array<XMFLOAT4X4, ShadowCascadeCount> mShadowViewProj = {};
+    std::array<float, ShadowCascadeCount> mShadowSplitDepths = {1.0f, 1.0f, 1.0f, 1.0f};
+    XMFLOAT3 mShadowLightDirection = {-0.25f, -1.0f, 0.35f};
+    float mShadowSplitLambda = 0.72f;
+    float mShadowMaxDistance = 180.0f;
 
     bool mFallingBallsEnabled = false;
     float mFallingSpawnTimer = 0.0f;
@@ -327,6 +359,7 @@ private:
     bool mDigit2WasDown = false;
     bool mDigit3WasDown = false;
     bool mDigit4WasDown = false;
+    bool mDigit5WasDown = false;
 
     unsigned int mActiveSceneIndex = 0;
     unsigned int mLastVisibleCount = 0;

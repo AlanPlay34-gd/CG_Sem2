@@ -16,6 +16,7 @@ cbuffer ObjectConstants : register(b0)
 
 cbuffer PassConstants : register(b1)
 {
+    float4x4 gView;
     float4x4 gInvViewProj;
     float3 gEyePosW;
     float gPassPadding;
@@ -180,13 +181,21 @@ GBufferOut PS_Geometry(PixelIn pin)
 
     float4 albedo = gDiffuseMap.Sample(gLinearWrap, pin.TexC);
     float3 normalTS = gNormalMap.Sample(gLinearWrap, pin.TexC).xyz * 2.0f - 1.0f;
+    float normalScale = (gObjectPadding.z > 0.001f) ? gObjectPadding.z : 1.0f;
+    normalTS.xy *= normalScale;
 
-    float3 T = normalize(pin.TangentW);
-    float3 B = normalize(pin.BitangentW);
     float3 N = normalize(pin.NormalW);
+    float3 T = normalize(pin.TangentW - N * dot(pin.TangentW, N));
+    float3 B = normalize(cross(N, T));
+    if (dot(B, pin.BitangentW) < 0.0f)
+    {
+        B = -B;
+    }
 
     float3x3 TBN = float3x3(T, B, N);
-    float3 normalW = normalize(mul(normalTS, TBN));
+    float3 normalWDirectX = normalize(mul(normalTS, TBN));
+    float3 normalWOpenGL = normalize(mul(float3(normalTS.x, -normalTS.y, normalTS.z), TBN));
+    float3 normalW = (dot(normalWOpenGL, N) > dot(normalWDirectX, N)) ? normalWOpenGL : normalWDirectX;
 
     if (gObjectPadding.x >= 1.5f && gObjectPadding.x < 2.5f)
     {

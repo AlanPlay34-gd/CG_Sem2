@@ -84,12 +84,13 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
 
     {
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0); // t0..t2
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0); // t0..t3
 
-        CD3DX12_ROOT_PARAMETER params[3];
+        CD3DX12_ROOT_PARAMETER params[4];
         params[0].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_PIXEL);
         params[1].InitAsConstantBufferView(0); // b0 pass
         params[2].InitAsConstantBufferView(1); // b1 lighting
+        params[3].InitAsConstantBufferView(2); // b2 shadows
 
         CD3DX12_STATIC_SAMPLER_DESC linearClamp(
             0,
@@ -97,12 +98,23 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+        CD3DX12_STATIC_SAMPLER_DESC shadowCmp(
+            1,
+            D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
+            D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+            D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+            D3D12_TEXTURE_ADDRESS_MODE_BORDER,
+            0.0f,
+            16,
+            D3D12_COMPARISON_FUNC_LESS_EQUAL,
+            D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE);
+        CD3DX12_STATIC_SAMPLER_DESC samplers[2] = {linearClamp, shadowCmp};
 
         CD3DX12_ROOT_SIGNATURE_DESC desc(
-            3,
+            4,
             params,
-            1,
-            &linearClamp,
+            2,
+            samplers,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         ComPtr<ID3DBlob> serialized;
@@ -162,6 +174,35 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
             IID_PPV_ARGS(&mParticleRootSignature)),
             "Create particle root signature failed");
     }
+
+    {
+        CD3DX12_ROOT_PARAMETER params[2];
+        params[0].InitAsConstantBufferView(0); // b0 object
+        params[1].InitAsConstantBufferView(1); // b1 cascade pass
+
+        CD3DX12_ROOT_SIGNATURE_DESC desc(
+            2,
+            params,
+            0,
+            nullptr,
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errors;
+        ThrowIfFailed(D3D12SerializeRootSignature(
+            &desc,
+            D3D_ROOT_SIGNATURE_VERSION_1,
+            &serialized,
+            &errors),
+            "Serialize shadow root signature failed");
+
+        ThrowIfFailed(device->CreateRootSignature(
+            0,
+            serialized->GetBufferPointer(),
+            serialized->GetBufferSize(),
+            IID_PPV_ARGS(&mShadowRootSignature)),
+            "Create shadow root signature failed");
+    }
 }
 
 void RenderingSystem::BuildPSOs(ID3D12Device* device) {
@@ -177,6 +218,7 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
     auto gsParticle = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "GS_Particle", "gs_5_0");
     auto psParticle = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "PS_Particle", "ps_5_0");
     auto csParticleUpdate = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "CS_UpdateParticles", "cs_5_0");
+    auto vsShadow = d3dUtil::CompileShader(L"shader/shadow.hlsl", nullptr, "VS_Shadow", "vs_5_0");
 
     std::array<D3D12_INPUT_ELEMENT_DESC, 5> inputLayout = {
         D3D12_INPUT_ELEMENT_DESC{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -291,4 +333,27 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
 
     ThrowIfFailed(device->CreateComputePipelineState(&particleCsDesc, IID_PPV_ARGS(&mParticleComputePSO)),
                   "Create particle compute PSO failed");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowDesc = {};
+    shadowDesc.InputLayout = {inputLayout.data(), static_cast<UINT>(inputLayout.size())};
+    shadowDesc.pRootSignature = mShadowRootSignature.Get();
+    shadowDesc.VS = {vsShadow->GetBufferPointer(), vsShadow->GetBufferSize()};
+    shadowDesc.PS = {nullptr, 0};
+    shadowDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    shadowDesc.SampleMask = UINT_MAX;
+    shadowDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    // Avoid self-shadowing from hidden/internal backfaces in complex meshes (Sponza).
+    shadowDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    shadowDesc.RasterizerState.DepthBias = 850;
+    shadowDesc.RasterizerState.SlopeScaledDepthBias = 2.2f;
+    shadowDesc.RasterizerState.DepthBiasClamp = 0.0f;
+    shadowDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    shadowDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    shadowDesc.NumRenderTargets = 0;
+    shadowDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    shadowDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    shadowDesc.SampleDesc.Count = 1;
+
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&shadowDesc, IID_PPV_ARGS(&mShadowPSO)),
+                  "Create shadow PSO failed");
 }

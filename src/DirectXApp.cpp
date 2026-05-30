@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <cfloat>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
@@ -475,6 +476,8 @@ DirectXApp::~DirectXApp() {
     mObjectCB.reset();
     mPassCB.reset();
     mLightingCB.reset();
+    mShadowPassCB.reset();
+    mShadowCB.reset();
 
     mTextureResources.clear();
     mTextureNameToIndex.clear();
@@ -497,6 +500,7 @@ DirectXApp::~DirectXApp() {
     mVertexBufferGPU.Reset();
     mIndexBufferGPU.Reset();
     mDepthStencilBuffer.Reset();
+    mShadowMap.Reset();
     for (auto& buffer : mSwapChainBuffer) {
         buffer.Reset();
     }
@@ -657,10 +661,50 @@ void DirectXApp::CreateRtvAndDsvDescriptorHeaps() {
     ThrowIfFailed(mDevice->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvHeap)), "Create RTV heap failed");
 
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
-    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.NumDescriptors = 1 + ShadowCascadeCount;
     dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(mDevice->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mDsvHeap)), "Create DSV heap failed");
+}
+
+MeshData CreateGroundPlaneMesh(float halfSize, float uvScale) {
+    MeshData mesh;
+    mesh.vertices.resize(4);
+
+    auto setVertex = [&](unsigned int idx, float x, float z, float u, float v) {
+        Vertex vert;
+        vert.Position = XMFLOAT3(x, 0.0f, z);
+        vert.Normal = XMFLOAT3(0.0f, 1.0f, 0.0f);
+        vert.Tangent = XMFLOAT3(1.0f, 0.0f, 0.0f);
+        vert.Bitangent = XMFLOAT3(0.0f, 0.0f, 1.0f);
+        vert.TexC = XMFLOAT2(u, v);
+        mesh.vertices[idx] = vert;
+    };
+
+    setVertex(0, -halfSize, -halfSize, 0.0f, 0.0f);
+    setVertex(1, -halfSize, halfSize, 0.0f, uvScale);
+    setVertex(2, halfSize, halfSize, uvScale, uvScale);
+    setVertex(3, halfSize, -halfSize, uvScale, 0.0f);
+
+    // Two-sided plane: duplicates opposite winding so it stays visible/shadow-casting
+    // regardless of front-face convention.
+    mesh.indices = {
+        0, 1, 2, 0, 2, 3,
+        2, 1, 0, 3, 2, 0
+    };
+
+    Submesh submesh;
+    submesh.indexCount = static_cast<unsigned int>(mesh.indices.size());
+    submesh.startIndexLocation = 0;
+    submesh.baseVertexLocation = 0;
+    submesh.material.diffuseTextureName = "spnza_bricks_a_diff";
+    // Keep the test plane lighting stable and clear for shadow evaluation.
+    submesh.material.normalTextureName.clear();
+    submesh.material.displacementTextureName.clear();
+    submesh.material.shininess = 18.0f;
+    mesh.submeshes.push_back(submesh);
+
+    return mesh;
 }
 
 void DirectXApp::CreateRenderTargetViews() {
@@ -762,6 +806,7 @@ void DirectXApp::BuildScene() {
     ActivateScene(0, false);
 
     BuildConstantBuffers();
+    BuildShadowResources();
     InitializeParticleResources();
     BuildMainSrvHeap();
     BindSubmeshTextures();
@@ -858,6 +903,24 @@ void DirectXApp::LoadModels() {
         OutputDebugStringA(msg.c_str());
     }
 
+    {
+        MeshData ground = CreateGroundPlaneMesh(26.0f, 6.0f);
+        const MeshBounds bounds = ComputeMeshBounds(ground);
+
+        ModelAsset asset;
+        asset.name = "lab6_ground";
+        asset.submeshStart = static_cast<unsigned int>(mSceneMesh.submeshes.size());
+        asset.submeshCount = static_cast<unsigned int>(ground.submeshes.size());
+        asset.localBoundsCenter = bounds.center;
+        asset.localBoundsExtents = bounds.extents;
+        asset.localBoundsExtents.y = (std::max)(asset.localBoundsExtents.y, 0.05f);
+        asset.localBoundsRadius = bounds.radius;
+        mModelAssets.push_back(asset);
+
+        AppendMeshData(mSceneMesh, ground);
+        OutputDebugStringA("Created procedural model: lab6_ground\n");
+    }
+
     if (mModelAssets.empty()) {
         throw std::runtime_error("No scene models were loaded. Check assets paths.");
     }
@@ -878,7 +941,9 @@ void DirectXApp::BuildScenePresets() {
 
     const unsigned int earthModel = findModelIndex("earth");
     const unsigned int sponzaModel = findModelIndex("sponza");
+    const unsigned int groundModel = findModelIndex("lab6_ground");
     const bool hasSponza = ToLowerAscii(mModelAssets[sponzaModel].name) == "sponza";
+    const bool hasGround = ToLowerAscii(mModelAssets[groundModel].name) == "lab6_ground";
 
     ScenePreset lab123Scene;
     lab123Scene.name = L"Scene 1: Legacy Labs 1-3";
@@ -986,6 +1051,41 @@ void DirectXApp::BuildScenePresets() {
         lab5ParticlesScene.objects.push_back(earthRight);
     }
     mScenePresets.push_back(lab5ParticlesScene);
+
+    ScenePreset lab6ShadowsScene;
+    lab6ShadowsScene.name = L"Scene 5: Lab 6 Shadows";
+    lab6ShadowsScene.cameraPos = XMFLOAT3(0.0f, 4.2f, -12.5f);
+    lab6ShadowsScene.cameraYaw = 0.0f;
+    lab6ShadowsScene.cameraPitch = -0.24f;
+    {
+        if (hasGround) {
+            SceneObject ground;
+            ground.modelAssetIndex = groundModel;
+            ground.position = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            ground.scale = XMFLOAT3(1.0f, 1.0f, 1.0f);
+            lab6ShadowsScene.objects.push_back(ground);
+        }
+
+        SceneObject earthMain;
+        earthMain.modelAssetIndex = earthModel;
+        earthMain.position = XMFLOAT3(0.0f, 1.55f, 1.25f);
+        earthMain.scale = XMFLOAT3(0.62f, 0.62f, 0.62f);
+        earthMain.rotationY = 0.28f;
+        lab6ShadowsScene.objects.push_back(earthMain);
+
+        SceneObject earthRight;
+        earthRight.modelAssetIndex = earthModel;
+        earthRight.position = XMFLOAT3(0.95f, 1.12f, 0.25f);
+        earthRight.scale = XMFLOAT3(0.48f, 0.48f, 0.48f);
+        lab6ShadowsScene.objects.push_back(earthRight);
+
+        SceneObject earthLeft;
+        earthLeft.modelAssetIndex = earthModel;
+        earthLeft.position = XMFLOAT3(-0.85f, 0.98f, -0.25f);
+        earthLeft.scale = XMFLOAT3(0.42f, 0.42f, 0.42f);
+        lab6ShadowsScene.objects.push_back(earthLeft);
+    }
+    mScenePresets.push_back(lab6ShadowsScene);
 }
 
 void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources) {
@@ -1033,7 +1133,10 @@ void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources
         // Scene 2: animate two nearby planets.
         addTrack(earthIndices[0], 2.0f, 2.2f, 0.0f);
         addTrack(earthIndices[1], 2.0f, 2.2f, 1.15f);
-    } else if (mActiveSceneIndex != 3u && !earthIndices.empty()) {
+    } else if (mActiveSceneIndex == 4u && earthIndices.size() >= 2u) {
+        // Scene 5 (Lab 6): animate only one planet to keep shadow test readable.
+        addTrack(earthIndices[1], 1.1f, 1.45f, 0.0f);
+    } else if (mActiveSceneIndex != 3u && mActiveSceneIndex != 4u && !earthIndices.empty()) {
         addTrack(earthIndices[0], (mActiveSceneIndex == 2u) ? 3.0f : 2.0f, 2.2f, 0.0f);
     }
 
@@ -1051,10 +1154,12 @@ void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources
 
     if (rebuildGpuResources && mObjectCB && mPassCB && mLightingCB) {
         BuildConstantBuffers();
+        BuildShadowResources();
         BuildMainSrvHeap();
         BindSubmeshTextures();
     }
 
+    BuildLights();
     UpdateWindowTitle();
 }
 
@@ -1313,10 +1418,12 @@ void DirectXApp::UpdateWindowTitle() {
         ws << L" | OctNodes " << mLastOctreeNodesVisited;
     }
 
-    ws << L" | Scene: [1-4]";
+    ws << L" | Scene: [1-5]";
     ws << L" | Lab4 Debug: C/O";
     if (mActiveSceneIndex == 3u) {
         ws << L" | Lab5: Particles";
+    } else if (mActiveSceneIndex == 4u) {
+        ws << L" | Lab6: CSM+PCF";
     }
     SetWindowTextW(mHwnd, ws.str().c_str());
 }
@@ -1480,8 +1587,59 @@ void DirectXApp::BuildConstantBuffers() {
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(mDevice.Get(), mObjectCbvCount, true);
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(mDevice.Get(), 1, true);
     mLightingCB = std::make_unique<UploadBuffer<LightingConstants>>(mDevice.Get(), LightingCbElementCount, true);
+    mShadowPassCB = std::make_unique<UploadBuffer<ShadowPassConstants>>(mDevice.Get(), ShadowCascadeCount, true);
+    mShadowCB = std::make_unique<UploadBuffer<ShadowConstants>>(mDevice.Get(), 1, true);
     mParticleSimCB = std::make_unique<UploadBuffer<ParticleSimConstants>>(mDevice.Get(), 1, true);
     mParticleRenderCB = std::make_unique<UploadBuffer<ParticleRenderConstants>>(mDevice.Get(), 1, true);
+}
+
+void DirectXApp::BuildShadowResources() {
+    if (!mDevice) {
+        return;
+    }
+
+    mShadowMap.Reset();
+
+    D3D12_RESOURCE_DESC shadowDesc = {};
+    shadowDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    shadowDesc.Alignment = 0;
+    shadowDesc.Width = ShadowMapSize;
+    shadowDesc.Height = ShadowMapSize;
+    shadowDesc.DepthOrArraySize = static_cast<UINT16>(ShadowCascadeCount);
+    shadowDesc.MipLevels = 1;
+    shadowDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+    shadowDesc.SampleDesc.Count = 1;
+    shadowDesc.SampleDesc.Quality = 0;
+    shadowDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    shadowDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+    D3D12_CLEAR_VALUE clear = {};
+    clear.Format = DXGI_FORMAT_D32_FLOAT;
+    clear.DepthStencil.Depth = 1.0f;
+    clear.DepthStencil.Stencil = 0;
+
+    const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+    ThrowIfFailed(mDevice->CreateCommittedResource(
+        &defaultHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &shadowDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &clear,
+        IID_PPV_ARGS(&mShadowMap)),
+        "Create shadow map array failed");
+
+    mShadowMapState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+
+    for (unsigned int i = 0; i < ShadowCascadeCount; ++i) {
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+        dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+        dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+        dsvDesc.Texture2DArray.MipSlice = 0;
+        dsvDesc.Texture2DArray.FirstArraySlice = static_cast<UINT>(i);
+        dsvDesc.Texture2DArray.ArraySize = 1;
+        mDevice->CreateDepthStencilView(mShadowMap.Get(), &dsvDesc, ShadowCascadeDsv(i));
+    }
 }
 
 void DirectXApp::BuildMainSrvHeap() {
@@ -1491,11 +1649,12 @@ void DirectXApp::BuildMainSrvHeap() {
     mLightingCbvIndex = mPassCbvIndex + 1;
     mTextureSrvStart = mLightingCbvIndex + 1;
     mGBufferSrvStart = mTextureSrvStart + textureCount;
-    mParticleSrvStart = mGBufferSrvStart + GBuffer::Count;
+    mShadowSrvIndex = mGBufferSrvStart + GBuffer::Count;
+    mParticleSrvStart = mShadowSrvIndex + 1;
     mParticleUavStart = mParticleSrvStart + ParticleBufferCount;
 
     const unsigned int descriptorCount =
-        mObjectCbvCount + 2 + textureCount + GBuffer::Count + ParticleBufferCount + ParticleBufferCount;
+        mObjectCbvCount + 2 + textureCount + GBuffer::Count + 1 + ParticleBufferCount + ParticleBufferCount;
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
     heapDesc.NumDescriptors = descriptorCount;
@@ -1553,6 +1712,25 @@ void DirectXApp::BuildMainSrvHeap() {
         gbufferCpu,
         gbufferGpu,
         mCbvSrvUavDescriptorSize);
+
+    if (mShadowMap) {
+        CD3DX12_CPU_DESCRIPTOR_HANDLE shadowSrvCpu(
+            mCbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(mShadowSrvIndex),
+            mCbvSrvUavDescriptorSize);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC shadowSrvDesc = {};
+        shadowSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        shadowSrvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        shadowSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        shadowSrvDesc.Texture2DArray.MostDetailedMip = 0;
+        shadowSrvDesc.Texture2DArray.MipLevels = 1;
+        shadowSrvDesc.Texture2DArray.FirstArraySlice = 0;
+        shadowSrvDesc.Texture2DArray.ArraySize = ShadowCascadeCount;
+        shadowSrvDesc.Texture2DArray.PlaneSlice = 0;
+        shadowSrvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+        mDevice->CreateShaderResourceView(mShadowMap.Get(), &shadowSrvDesc, shadowSrvCpu);
+    }
 
     for (unsigned int i = 0; i < ParticleBufferCount; ++i) {
         if (!mParticleBuffers[i]) {
@@ -1625,10 +1803,17 @@ void DirectXApp::BuildLights() {
 
     LightData dir;
     dir.Type = static_cast<unsigned int>(LightType::Directional);
-    dir.Direction = XMFLOAT3(-0.25f, -1.0f, 0.35f);
-    dir.Color = XMFLOAT3(1.0f, 0.97f, 0.92f);
-    dir.Intensity = 1.1f;
+    if (mActiveSceneIndex == 4u) {
+        dir.Direction = XMFLOAT3(-0.22f, -1.0f, 0.18f);
+        dir.Color = XMFLOAT3(1.0f, 0.97f, 0.92f);
+        dir.Intensity = 1.38f;
+    } else {
+        dir.Direction = XMFLOAT3(-0.25f, -1.0f, 0.35f);
+        dir.Color = XMFLOAT3(1.0f, 0.97f, 0.92f);
+        dir.Intensity = 1.1f;
+    }
     mLights.push_back(dir);
+    mShadowLightDirection = dir.Direction;
 
     auto addPoint = [&](const XMFLOAT3& pos, const XMFLOAT3& color, float intensity, float range) {
         LightData point;
@@ -1640,9 +1825,14 @@ void DirectXApp::BuildLights() {
         mLights.push_back(point);
     };
 
-    addPoint(XMFLOAT3(-10.0f, 5.0f, -2.0f), XMFLOAT3(1.0f, 0.35f, 0.35f), 5.5f, 26.0f);
-    addPoint(XMFLOAT3(9.0f, 6.0f, 7.0f), XMFLOAT3(0.3f, 0.55f, 1.0f), 4.8f, 24.0f);
-    addPoint(XMFLOAT3(0.0f, 10.0f, -11.0f), XMFLOAT3(0.45f, 1.0f, 0.45f), 3.8f, 28.0f);
+    if (mActiveSceneIndex == 4u) {
+        // Small fill, so directional shadow contrast remains visible on the plane.
+        addPoint(XMFLOAT3(0.0f, 4.4f, -0.8f), XMFLOAT3(1.0f, 0.93f, 0.80f), 1.2f, 14.0f);
+    } else {
+        addPoint(XMFLOAT3(-10.0f, 5.0f, -2.0f), XMFLOAT3(1.0f, 0.35f, 0.35f), 5.5f, 26.0f);
+        addPoint(XMFLOAT3(9.0f, 6.0f, 7.0f), XMFLOAT3(0.3f, 0.55f, 1.0f), 4.8f, 24.0f);
+        addPoint(XMFLOAT3(0.0f, 10.0f, -11.0f), XMFLOAT3(0.45f, 1.0f, 0.45f), 3.8f, 28.0f);
+    }
 
     auto addSpot = [&](const XMFLOAT3& pos, const XMFLOAT3& dirVec, const XMFLOAT3& color, float intensity, float range, float angle) {
         LightData spot;
@@ -1656,8 +1846,10 @@ void DirectXApp::BuildLights() {
         mLights.push_back(spot);
     };
 
-    addSpot(XMFLOAT3(13.0f, 9.0f, 0.0f), XMFLOAT3(-1.0f, -0.75f, 0.0f), XMFLOAT3(1.0f, 0.9f, 0.5f), 2.2f, 34.0f, 0.35f);
-    addSpot(XMFLOAT3(-13.0f, 8.0f, 3.0f), XMFLOAT3(1.0f, -0.85f, -0.15f), XMFLOAT3(0.4f, 1.0f, 0.9f), 2.0f, 30.0f, 0.32f);
+    if (mActiveSceneIndex != 4u) {
+        addSpot(XMFLOAT3(13.0f, 9.0f, 0.0f), XMFLOAT3(-1.0f, -0.75f, 0.0f), XMFLOAT3(1.0f, 0.9f, 0.5f), 2.2f, 34.0f, 0.35f);
+        addSpot(XMFLOAT3(-13.0f, 8.0f, 3.0f), XMFLOAT3(1.0f, -0.85f, -0.15f), XMFLOAT3(0.4f, 1.0f, 0.9f), 2.0f, 30.0f, 0.32f);
+    }
 }
 
 void DirectXApp::UpdateFallingLights(float dt) {
@@ -1988,6 +2180,228 @@ void DirectXApp::DrawParticles(ID3D12GraphicsCommandList* cmdList,
     cmdList->DrawInstanced(mParticleAliveCount, 1, 0, 0);
 }
 
+void DirectXApp::UpdateShadowCascades(const XMMATRIX& view) {
+    if (!mShadowPassCB || !mShadowCB || !mShadowMap) {
+        return;
+    }
+
+    XMVECTOR lightDir = XMLoadFloat3(&mShadowLightDirection);
+    if (XMVectorGetX(XMVector3LengthSq(lightDir)) < 1e-6f) {
+        lightDir = XMVectorSet(-0.25f, -1.0f, 0.35f, 0.0f);
+    }
+    lightDir = XMVector3Normalize(lightDir);
+
+    const float nearZ = 0.1f;
+    const float sceneShadowMaxDistance = (mActiveSceneIndex == 4u) ? 90.0f : mShadowMaxDistance;
+    const float farZ = (std::max)(nearZ + 1.0f, sceneShadowMaxDistance);
+    const float fovY = 0.25f * XM_PI;
+    const float aspect = static_cast<float>(mClientWidth) / static_cast<float>((std::max)(1u, mClientHeight));
+    const float tanHalfFovY = std::tan(0.5f * fovY);
+    const float tanHalfFovX = tanHalfFovY * aspect;
+
+    std::array<float, ShadowCascadeCount> splits{};
+    const float splitLambda = std::clamp(mShadowSplitLambda, 0.0f, 1.0f);
+    for (unsigned int i = 0; i < ShadowCascadeCount; ++i) {
+        const float p = static_cast<float>(i + 1u) / static_cast<float>(ShadowCascadeCount);
+        const float logSplit = nearZ * std::pow(farZ / nearZ, p);
+        const float uniformSplit = nearZ + (farZ - nearZ) * p;
+        splits[i] = uniformSplit * (1.0f - splitLambda) + logSplit * splitLambda;
+        mShadowSplitDepths[i] = splits[i];
+    }
+
+    const XMMATRIX invView = XMMatrixInverse(nullptr, view);
+
+    for (unsigned int cascade = 0; cascade < ShadowCascadeCount; ++cascade) {
+        const float cascadeNear = (cascade == 0u) ? nearZ : splits[cascade - 1u];
+        const float cascadeFar = splits[cascade];
+
+        const float nearHalfX = cascadeNear * tanHalfFovX;
+        const float nearHalfY = cascadeNear * tanHalfFovY;
+        const float farHalfX = cascadeFar * tanHalfFovX;
+        const float farHalfY = cascadeFar * tanHalfFovY;
+
+        std::array<XMVECTOR, 8> frustumCornersVs = {
+            XMVectorSet(-nearHalfX, nearHalfY, cascadeNear, 1.0f),
+            XMVectorSet( nearHalfX, nearHalfY, cascadeNear, 1.0f),
+            XMVectorSet( nearHalfX,-nearHalfY, cascadeNear, 1.0f),
+            XMVectorSet(-nearHalfX,-nearHalfY, cascadeNear, 1.0f),
+            XMVectorSet(-farHalfX,  farHalfY,  cascadeFar, 1.0f),
+            XMVectorSet( farHalfX,  farHalfY,  cascadeFar, 1.0f),
+            XMVectorSet( farHalfX, -farHalfY,  cascadeFar, 1.0f),
+            XMVectorSet(-farHalfX, -farHalfY,  cascadeFar, 1.0f)
+        };
+
+        std::array<XMVECTOR, 8> frustumCornersWs{};
+        XMVECTOR centerWs = XMVectorZero();
+        for (unsigned int i = 0; i < 8; ++i) {
+            frustumCornersWs[i] = XMVector3TransformCoord(frustumCornersVs[i], invView);
+            centerWs = XMVectorAdd(centerWs, frustumCornersWs[i]);
+        }
+        centerWs = XMVectorScale(centerWs, 1.0f / 8.0f);
+
+        float radius = 0.0f;
+        for (unsigned int i = 0; i < 8; ++i) {
+            const XMVECTOR delta = XMVectorSubtract(frustumCornersWs[i], centerWs);
+            const float d = XMVectorGetX(XMVector3Length(delta));
+            radius = (std::max)(radius, d);
+        }
+
+        radius = std::ceil(radius * 16.0f) / 16.0f;
+        const float zPadding = (std::max)(120.0f, radius * 2.0f);
+        const XMVECTOR lightPos = XMVectorSubtract(centerWs, XMVectorScale(lightDir, radius + zPadding));
+
+        XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        if (std::abs(XMVectorGetX(XMVector3Dot(up, lightDir))) > 0.96f) {
+            up = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        const XMMATRIX lightView = XMMatrixLookAtLH(lightPos, centerWs, up);
+
+        XMVECTOR mins = XMVectorSet(FLT_MAX, FLT_MAX, FLT_MAX, 1.0f);
+        XMVECTOR maxs = XMVectorSet(-FLT_MAX, -FLT_MAX, -FLT_MAX, 1.0f);
+        for (unsigned int i = 0; i < 8; ++i) {
+            const XMVECTOR cornerLs = XMVector3TransformCoord(frustumCornersWs[i], lightView);
+            mins = XMVectorMin(mins, cornerLs);
+            maxs = XMVectorMax(maxs, cornerLs);
+        }
+
+        float minX = XMVectorGetX(mins);
+        float minY = XMVectorGetY(mins);
+        float minZ = XMVectorGetZ(mins);
+        float maxX = XMVectorGetX(maxs);
+        float maxY = XMVectorGetY(maxs);
+        float maxZ = XMVectorGetZ(maxs);
+
+        const float padXY = 2.0f;
+        minX -= padXY;
+        minY -= padXY;
+        maxX += padXY;
+        maxY += padXY;
+
+        const float extentX = maxX - minX;
+        const float extentY = maxY - minY;
+        if (extentX > 1e-5f && extentY > 1e-5f) {
+            const float texelSizeX = extentX / static_cast<float>(ShadowMapSize);
+            const float texelSizeY = extentY / static_cast<float>(ShadowMapSize);
+            const float centerX = 0.5f * (minX + maxX);
+            const float centerY = 0.5f * (minY + maxY);
+            const float snappedCenterX = std::floor(centerX / texelSizeX) * texelSizeX;
+            const float snappedCenterY = std::floor(centerY / texelSizeY) * texelSizeY;
+            const float snapDx = snappedCenterX - centerX;
+            const float snapDy = snappedCenterY - centerY;
+            minX += snapDx;
+            maxX += snapDx;
+            minY += snapDy;
+            maxY += snapDy;
+        }
+
+        minZ = (std::max)(0.01f, minZ - zPadding);
+        maxZ += zPadding;
+
+        const XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(minX, maxX, minY, maxY, minZ, maxZ);
+        const XMMATRIX lightViewProj = lightView * lightProj;
+        XMStoreFloat4x4(&mShadowViewProj[cascade], XMMatrixTranspose(lightViewProj));
+
+        ShadowPassConstants pass{};
+        pass.LightViewProj = mShadowViewProj[cascade];
+        mShadowPassCB->CopyData(static_cast<int>(cascade), pass);
+    }
+
+    XMFLOAT3 lightDirNorm{};
+    XMStoreFloat3(&lightDirNorm, lightDir);
+    mShadowLightDirection = lightDirNorm;
+
+    ShadowConstants shadow{};
+    for (unsigned int i = 0; i < ShadowCascadeCount; ++i) {
+        shadow.LightViewProj[i] = mShadowViewProj[i];
+    }
+    shadow.CascadeSplits = XMFLOAT4(mShadowSplitDepths[0], mShadowSplitDepths[1], mShadowSplitDepths[2], mShadowSplitDepths[3]);
+    shadow.LightDirection = lightDirNorm;
+    if (mActiveSceneIndex == 4u) {
+        shadow.ShadowStrength = 0.92f;
+        shadow.DepthBias = 0.00078f;
+        shadow.NormalBias = 0.0024f;
+    } else {
+        shadow.ShadowStrength = 0.9f;
+        shadow.DepthBias = 0.00045f;
+        shadow.NormalBias = 0.0015f;
+    }
+    mShadowCB->CopyData(0, shadow);
+}
+
+void DirectXApp::RenderShadowMaps(const XMMATRIX& view) {
+    if (!mCommandList || !mShadowMap || !mShadowPassCB || !mObjectCB || mSceneObjects.empty()) {
+        return;
+    }
+
+    UpdateShadowCascades(view);
+
+    if (mShadowMapState != D3D12_RESOURCE_STATE_DEPTH_WRITE) {
+        auto toDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+            mShadowMap.Get(),
+            mShadowMapState,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        mCommandList->ResourceBarrier(1, &toDepthWrite);
+        mShadowMapState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
+
+    const D3D12_VIEWPORT shadowViewport = {
+        0.0f,
+        0.0f,
+        static_cast<float>(ShadowMapSize),
+        static_cast<float>(ShadowMapSize),
+        0.0f,
+        1.0f
+    };
+    const D3D12_RECT shadowScissor = {0, 0, static_cast<LONG>(ShadowMapSize), static_cast<LONG>(ShadowMapSize)};
+
+    mCommandList->RSSetViewports(1, &shadowViewport);
+    mCommandList->RSSetScissorRects(1, &shadowScissor);
+    mCommandList->SetPipelineState(mRenderingSystem->GetShadowPSO());
+    mCommandList->SetGraphicsRootSignature(mRenderingSystem->GetShadowRootSignature());
+    mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
+    mCommandList->IASetIndexBuffer(&mIndexBufferView);
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    const unsigned int objectElementSize = mObjectCB->GetElementSize();
+    const unsigned int shadowPassElementSize = mShadowPassCB->GetElementSize();
+
+    for (unsigned int cascade = 0; cascade < ShadowCascadeCount; ++cascade) {
+        const D3D12_CPU_DESCRIPTOR_HANDLE cascadeDsv = ShadowCascadeDsv(cascade);
+        mCommandList->ClearDepthStencilView(cascadeDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        mCommandList->OMSetRenderTargets(0, nullptr, FALSE, &cascadeDsv);
+
+        const D3D12_GPU_VIRTUAL_ADDRESS shadowPassAddress =
+            mShadowPassCB->Resource()->GetGPUVirtualAddress() + static_cast<UINT64>(cascade) * shadowPassElementSize;
+        mCommandList->SetGraphicsRootConstantBufferView(1, shadowPassAddress);
+
+        for (unsigned int objectIndex = 0; objectIndex < static_cast<unsigned int>(mSceneObjects.size()); ++objectIndex) {
+            const SceneObject& object = mSceneObjects[objectIndex];
+            const ModelAsset& model = mModelAssets[object.modelAssetIndex];
+            const D3D12_GPU_VIRTUAL_ADDRESS objectAddress =
+                mObjectCB->Resource()->GetGPUVirtualAddress() + static_cast<UINT64>(objectIndex) * objectElementSize;
+            mCommandList->SetGraphicsRootConstantBufferView(0, objectAddress);
+
+            for (unsigned int submeshOffset = 0; submeshOffset < model.submeshCount; ++submeshOffset) {
+                const Submesh& submesh = mSceneMesh.submeshes[model.submeshStart + submeshOffset];
+                mCommandList->DrawIndexedInstanced(
+                    submesh.indexCount,
+                    1,
+                    submesh.startIndexLocation,
+                    submesh.baseVertexLocation,
+                    0);
+            }
+        }
+    }
+
+    auto toSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+        mShadowMap.Get(),
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    mCommandList->ResourceBarrier(1, &toSrv);
+    mShadowMapState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+}
+
 float DirectXApp::ComputeLodAnimationTime(float dt, float totalTime, float distanceToCamera, float& timeAccum, float& stepAccum) {
     float step = 0.0f;
     if (distanceToCamera > 140.0f) {
@@ -2106,6 +2520,7 @@ void DirectXApp::Update(const GameTimer& gt) {
     const bool digit2Down = (GetAsyncKeyState('2') & 0x8000) != 0;
     const bool digit3Down = (GetAsyncKeyState('3') & 0x8000) != 0;
     const bool digit4Down = (GetAsyncKeyState('4') & 0x8000) != 0;
+    const bool digit5Down = (GetAsyncKeyState('5') & 0x8000) != 0;
     bool titleDirty = false;
 
     if (f1Down && !mF1WasDown) {
@@ -2193,6 +2608,12 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
     mDigit4WasDown = digit4Down;
 
+    if (digit5Down && !mDigit5WasDown) {
+        ActivateScene(4, true);
+        titleDirty = true;
+    }
+    mDigit5WasDown = digit5Down;
+
     auto clampTiling = [](float v) {
         return std::clamp(v, 0.10f, 16.0f);
     };
@@ -2271,7 +2692,7 @@ void DirectXApp::Update(const GameTimer& gt) {
 
     CollectVisibleObjects(view, proj);
 
-    for (unsigned int objectIndex : mVisibleObjects) {
+    for (unsigned int objectIndex = 0; objectIndex < static_cast<unsigned int>(mSceneObjects.size()); ++objectIndex) {
         const SceneObject& object = mSceneObjects[objectIndex];
         const XMMATRIX world = XMLoadFloat4x4(&object.world);
 
@@ -2283,7 +2704,14 @@ void DirectXApp::Update(const GameTimer& gt) {
         obj.Padding.x = static_cast<float>(mDebugViewMode);
         const float objectScale = (std::max)(object.scale.x, (std::max)(object.scale.y, object.scale.z));
         obj.Padding.y = std::clamp(0.06f * objectScale, 0.008f, 0.06f);
-        obj.Padding.z = 0.0f;
+        float normalScale = 1.0f;
+        if (mActiveSceneIndex == 4u) {
+            const std::string modelName = ToLowerAscii(mModelAssets[object.modelAssetIndex].name);
+            if (modelName == "earth") {
+                normalScale = 0.72f;
+            }
+        }
+        obj.Padding.z = normalScale;
         obj.WaveParams = XMFLOAT4(
             mDisplacementWaveProgress,
             5.0f,
@@ -2298,11 +2726,18 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
 
     PassConstants pass = {};
+    XMStoreFloat4x4(&pass.View, XMMatrixTranspose(view));
     XMMATRIX invViewProj = XMMatrixInverse(nullptr, view * proj);
     XMStoreFloat4x4(&pass.InvViewProj, XMMatrixTranspose(invViewProj));
     pass.EyePosW = mEyePos;
-    pass.AmbientColor = XMFLOAT4(0.08f, 0.08f, 0.1f, 1.0f);
+    if (mActiveSceneIndex == 4u) {
+        pass.AmbientColor = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+    } else {
+        pass.AmbientColor = XMFLOAT4(0.08f, 0.08f, 0.1f, 1.0f);
+    }
     mPassCB->CopyData(0, pass);
+
+    UpdateShadowCascades(view);
 
     const unsigned int newVisibleCount = static_cast<unsigned int>(mVisibleObjects.size());
     const unsigned int newTestedCount = mObjectsTestedThisFrame;
@@ -2351,6 +2786,7 @@ void DirectXApp::Draw(const GameTimer&) {
         5000.0f);
 
     ExecuteParticleSimulation(mCommandList.Get());
+    RenderShadowMaps(view);
 
     auto* gbuffer = mRenderingSystem->GetGBuffer();
 
@@ -2455,6 +2891,7 @@ void DirectXApp::Draw(const GameTimer&) {
 
     mCommandList->SetGraphicsRootDescriptorTable(0, GetGpuSrvHandle(mGBufferSrvStart));
     mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
+    mCommandList->SetGraphicsRootConstantBufferView(3, mShadowCB->Resource()->GetGPUVirtualAddress());
 
     const unsigned int lightElementSize = mLightingCB->GetElementSize();
     unsigned int lightCbIndex = 0;
@@ -2580,6 +3017,14 @@ D3D12_CPU_DESCRIPTOR_HANDLE DirectXApp::CurrentBackBufferView() const {
 
 D3D12_CPU_DESCRIPTOR_HANDLE DirectXApp::DepthStencilView() const {
     return mDsvHeap->GetCPUDescriptorHandleForHeapStart();
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE DirectXApp::ShadowCascadeDsv(unsigned int cascadeIndex) const {
+    const unsigned int clamped = (std::min)(cascadeIndex, ShadowCascadeCount - 1u);
+    return CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        mDsvHeap->GetCPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(1u + clamped),
+        mDsvDescriptorSize);
 }
 
 ID3D12Resource* DirectXApp::CurrentBackBuffer() const {
