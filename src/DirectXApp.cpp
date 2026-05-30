@@ -1650,11 +1650,12 @@ void DirectXApp::BuildMainSrvHeap() {
     mTextureSrvStart = mLightingCbvIndex + 1;
     mGBufferSrvStart = mTextureSrvStart + textureCount;
     mShadowSrvIndex = mGBufferSrvStart + GBuffer::Count;
-    mParticleSrvStart = mShadowSrvIndex + 1;
+    mShadowOverlaySrvIndex = mShadowSrvIndex + 1;
+    mParticleSrvStart = mShadowOverlaySrvIndex + 1;
     mParticleUavStart = mParticleSrvStart + ParticleBufferCount;
 
     const unsigned int descriptorCount =
-        mObjectCbvCount + 2 + textureCount + GBuffer::Count + 1 + ParticleBufferCount + ParticleBufferCount;
+        mObjectCbvCount + 2 + textureCount + GBuffer::Count + 2 + ParticleBufferCount + ParticleBufferCount;
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
     heapDesc.NumDescriptors = descriptorCount;
@@ -1730,6 +1731,46 @@ void DirectXApp::BuildMainSrvHeap() {
         shadowSrvDesc.Texture2DArray.PlaneSlice = 0;
         shadowSrvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
         mDevice->CreateShaderResourceView(mShadowMap.Get(), &shadowSrvDesc, shadowSrvCpu);
+    }
+
+    // Optional lab-6 extra: a pattern texture used only in shadowed areas during lighting pass.
+    {
+        unsigned int overlayTextureIndex = mFallbackDiffuseIndex;
+        // Prefer high-contrast textures so the shadow overlay is clearly visible.
+        const std::array<std::string, 6> preferredKeys = {
+            "lion",
+            "chain_texture",
+            "earth_alb",
+            "spnza_bricks_a_diff",
+            "sponza_floor_a_diff",
+            "sponza_roof_diff"
+        };
+        for (const auto& key : preferredKeys) {
+            auto it = mTextureNameToIndex.find(key);
+            if (it != mTextureNameToIndex.end()) {
+                overlayTextureIndex = it->second;
+                break;
+            }
+        }
+        if (overlayTextureIndex >= mTextureResources.size() && !mTextureResources.empty()) {
+            overlayTextureIndex = 0u;
+        }
+
+        const TextureResource& overlayTex = mTextureResources[overlayTextureIndex];
+        CD3DX12_CPU_DESCRIPTOR_HANDLE overlaySrvCpu(
+            mCbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(mShadowOverlaySrvIndex),
+            mCbvSrvUavDescriptorSize);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC overlaySrvDesc = {};
+        overlaySrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        overlaySrvDesc.Format = overlayTex.resource->GetDesc().Format;
+        overlaySrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        overlaySrvDesc.Texture2D.MostDetailedMip = 0;
+        overlaySrvDesc.Texture2D.MipLevels = overlayTex.resource->GetDesc().MipLevels;
+        overlaySrvDesc.Texture2D.PlaneSlice = 0;
+        overlaySrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+        mDevice->CreateShaderResourceView(overlayTex.resource.Get(), &overlaySrvDesc, overlaySrvCpu);
     }
 
     for (unsigned int i = 0; i < ParticleBufferCount; ++i) {
@@ -1827,7 +1868,7 @@ void DirectXApp::BuildLights() {
 
     if (mActiveSceneIndex == 4u) {
         // Small fill, so directional shadow contrast remains visible on the plane.
-        addPoint(XMFLOAT3(0.0f, 4.4f, -0.8f), XMFLOAT3(1.0f, 0.93f, 0.80f), 1.2f, 14.0f);
+        addPoint(XMFLOAT3(0.0f, 4.4f, -0.8f), XMFLOAT3(1.0f, 0.93f, 0.80f), 0.55f, 14.0f);
     } else {
         addPoint(XMFLOAT3(-10.0f, 5.0f, -2.0f), XMFLOAT3(1.0f, 0.35f, 0.35f), 5.5f, 26.0f);
         addPoint(XMFLOAT3(9.0f, 6.0f, 7.0f), XMFLOAT3(0.3f, 0.55f, 1.0f), 4.8f, 24.0f);
@@ -2194,7 +2235,7 @@ void DirectXApp::UpdateShadowCascades(const XMMATRIX& view) {
     const float nearZ = 0.1f;
     const float sceneShadowMaxDistance = (mActiveSceneIndex == 4u) ? 90.0f : mShadowMaxDistance;
     const float farZ = (std::max)(nearZ + 1.0f, sceneShadowMaxDistance);
-    const float fovY = 0.25f * XM_PI;
+    const float fovY = 0.25 * XM_PI;
     const float aspect = static_cast<float>(mClientWidth) / static_cast<float>((std::max)(1u, mClientHeight));
     const float tanHalfFovY = std::tan(0.5f * fovY);
     const float tanHalfFovX = tanHalfFovY * aspect;
@@ -2330,7 +2371,7 @@ void DirectXApp::UpdateShadowCascades(const XMMATRIX& view) {
 }
 
 void DirectXApp::RenderShadowMaps(const XMMATRIX& view) {
-    if (!mCommandList || !mShadowMap || !mShadowPassCB || !mObjectCB || mSceneObjects.empty()) {
+    if (!mCommandList || !mShadowMap || !mShadowPassCB || !mObjectCB || !mPassCB || mSceneObjects.empty()) {
         return;
     }
 
@@ -2357,11 +2398,10 @@ void DirectXApp::RenderShadowMaps(const XMMATRIX& view) {
 
     mCommandList->RSSetViewports(1, &shadowViewport);
     mCommandList->RSSetScissorRects(1, &shadowScissor);
-    mCommandList->SetPipelineState(mRenderingSystem->GetShadowPSO());
     mCommandList->SetGraphicsRootSignature(mRenderingSystem->GetShadowRootSignature());
+    mCommandList->SetGraphicsRootConstantBufferView(3, mPassCB->Resource()->GetGPUVirtualAddress());
     mCommandList->IASetVertexBuffers(0, 1, &mVertexBufferView);
     mCommandList->IASetIndexBuffer(&mIndexBufferView);
-    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     const unsigned int objectElementSize = mObjectCB->GetElementSize();
     const unsigned int shadowPassElementSize = mShadowPassCB->GetElementSize();
@@ -2382,8 +2422,28 @@ void DirectXApp::RenderShadowMaps(const XMMATRIX& view) {
                 mObjectCB->Resource()->GetGPUVirtualAddress() + static_cast<UINT64>(objectIndex) * objectElementSize;
             mCommandList->SetGraphicsRootConstantBufferView(0, objectAddress);
 
+            const float dx = object.worldBoundsCenter.x - mEyePos.x;
+            const float dy = object.worldBoundsCenter.y - mEyePos.y;
+            const float dz = object.worldBoundsCenter.z - mEyePos.z;
+            const float objectDistSq = dx * dx + dy * dy + dz * dz;
+            const bool objectNearForTess = (objectDistSq <= (55.0f * 55.0f));
+
             for (unsigned int submeshOffset = 0; submeshOffset < model.submeshCount; ++submeshOffset) {
                 const Submesh& submesh = mSceneMesh.submeshes[model.submeshStart + submeshOffset];
+                const bool hasDisplacementTexture = !submesh.material.displacementTextureName.empty() &&
+                                                    submesh.material.displacementSrvHeapIndex !=
+                                                        mTextureResources[mFallbackDisplacementIndex].srvHeapIndex;
+                const bool useTessShadow = hasDisplacementTexture && objectNearForTess;
+
+                if (useTessShadow) {
+                    mCommandList->SetPipelineState(mRenderingSystem->GetShadowTessellationPSO());
+                    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+                } else {
+                    mCommandList->SetPipelineState(mRenderingSystem->GetShadowPSO());
+                    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                }
+
+                mCommandList->SetGraphicsRootDescriptorTable(2, GetGpuSrvHandle(submesh.material.displacementSrvHeapIndex));
                 mCommandList->DrawIndexedInstanced(
                     submesh.indexCount,
                     1,

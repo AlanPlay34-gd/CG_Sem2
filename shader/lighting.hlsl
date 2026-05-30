@@ -2,8 +2,10 @@ Texture2D gAlbedoTex : register(t0);
 Texture2D gNormalTex : register(t1);
 Texture2D gDepthTex : register(t2);
 Texture2DArray gShadowTex : register(t3);
+Texture2D gShadowPatternTex : register(t4);
 SamplerState gLinearClamp : register(s0);
 SamplerComparisonState gShadowCmp : register(s1);
+SamplerState gLinearWrap : register(s2);
 
 cbuffer PassConstants : register(b0)
 {
@@ -212,6 +214,25 @@ float ComputeShadowFactor(float3 worldPos, float3 normalW)
     return shadow;
 }
 
+float3 ApplyShadowPattern(float3 litColor, float3 albedo, float3 worldPos, float shadowFactor)
+{
+    float shadowAmount = saturate((1.0f - shadowFactor) * gShadowStrength);
+    if (shadowAmount <= 1e-4f)
+    {
+        return litColor;
+    }
+
+    // Distinct world-space UV for shadow overlay so it does not merge with floor UVs.
+    float2 patternUv = worldPos.xz * 0.19f + float2(0.31f, 0.17f);
+    float3 pattern = gShadowPatternTex.Sample(gLinearWrap, patternUv).rgb;
+    float patternLuma = dot(pattern, float3(0.299f, 0.587f, 0.114f));
+
+    // High contrast textured tint that remains semi-transparent.
+    float3 patternColor = lerp(albedo * 0.08f, albedo * 0.98f, patternLuma);
+    float patternAlpha = saturate(0.01f + shadowAmount * 0.20f);
+    return lerp(litColor, patternColor, patternAlpha);
+}
+
 float4 PS_Lighting(VSOut pin) : SV_Target
 {
     float2 uv = pin.TexC;
@@ -234,15 +255,30 @@ float4 PS_Lighting(VSOut pin) : SV_Target
         {
             float3 direct = ComputeDirectional(normalW, albedo, gLight);
             float shadow = ComputeShadowFactor(worldPos, normalW);
-            color = lerp(direct * (1.0f - gShadowStrength), direct, shadow);
+            float3 lit = lerp(direct * (1.0f - gShadowStrength), direct, shadow);
+            color = ApplyShadowPattern(lit, albedo, worldPos, shadow);
         }
         else if (gLight.Type == 1)
         {
-            color = ComputePoint(worldPos, normalW, albedo, gLight);
+            float3 lit = ComputePoint(worldPos, normalW, albedo, gLight);
+            // Scene 5 has zero ambient by design: keep shadow pattern visible there
+            // even when a fill point light is enabled.
+            if ((gAmbientColor.x + gAmbientColor.y + gAmbientColor.z) < 1e-4f)
+            {
+                float shadow = ComputeShadowFactor(worldPos, normalW);
+                lit = ApplyShadowPattern(lit, albedo, worldPos, shadow);
+            }
+            color = lit;
         }
         else if (gLight.Type == 2)
         {
-            color = ComputeSpot(worldPos, normalW, albedo, gLight);
+            float3 lit = ComputeSpot(worldPos, normalW, albedo, gLight);
+            if ((gAmbientColor.x + gAmbientColor.y + gAmbientColor.z) < 1e-4f)
+            {
+                float shadow = ComputeShadowFactor(worldPos, normalW);
+                lit = ApplyShadowPattern(lit, albedo, worldPos, shadow);
+            }
+            color = lit;
         }
     }
 

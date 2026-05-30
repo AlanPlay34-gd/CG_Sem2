@@ -298,6 +298,7 @@ private:
     unsigned int mTextureSrvStart = 0;
     unsigned int mGBufferSrvStart = 0;
     unsigned int mShadowSrvIndex = 0;
+    unsigned int mShadowOverlaySrvIndex = 0;
     unsigned int mParticleSrvStart = 0;
     unsigned int mParticleUavStart = 0;
 

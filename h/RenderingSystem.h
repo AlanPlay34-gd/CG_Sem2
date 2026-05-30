@@ -30,6 +30,7 @@ public:
     ID3D12PipelineState* GetParticlePSO() const { return mParticlePSO.Get(); }
     ID3D12PipelineState* GetParticleComputePSO() const { return mParticleComputePSO.Get(); }
     ID3D12PipelineState* GetShadowPSO() const { return mShadowPSO.Get(); }
+    ID3D12PipelineState* GetShadowTessellationPSO() const { return mShadowTessellationPSO.Get(); }
 
     GBuffer* GetGBuffer() const { return mGBuffer.get(); }
 
@@ -57,6 +58,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mParticlePSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mParticleComputePSO;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mShadowPSO;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> mShadowTessellationPSO;
 
     std::unique_ptr<GBuffer> mGBuffer;
 };

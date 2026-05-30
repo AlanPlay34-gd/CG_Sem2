@@ -84,7 +84,7 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
 
     {
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0); // t0..t3
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 5, 0); // t0..t4
 
         CD3DX12_ROOT_PARAMETER params[4];
         params[0].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -108,12 +108,18 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
             16,
             D3D12_COMPARISON_FUNC_LESS_EQUAL,
             D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE);
-        CD3DX12_STATIC_SAMPLER_DESC samplers[2] = {linearClamp, shadowCmp};
+        CD3DX12_STATIC_SAMPLER_DESC linearWrap(
+            2,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+        CD3DX12_STATIC_SAMPLER_DESC samplers[3] = {linearClamp, shadowCmp, linearWrap};
 
         CD3DX12_ROOT_SIGNATURE_DESC desc(
             4,
             params,
-            2,
+            3,
             samplers,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -176,15 +182,27 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
     }
 
     {
-        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_DESCRIPTOR_RANGE shadowSrvRange;
+        shadowSrvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // t0 displacement
+
+        CD3DX12_ROOT_PARAMETER params[4];
         params[0].InitAsConstantBufferView(0); // b0 object
         params[1].InitAsConstantBufferView(1); // b1 cascade pass
+        params[2].InitAsDescriptorTable(1, &shadowSrvRange, D3D12_SHADER_VISIBILITY_ALL); // t0
+        params[3].InitAsConstantBufferView(2); // b2 pass (for tessellation LOD)
+
+        CD3DX12_STATIC_SAMPLER_DESC linearWrap(
+            0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP);
 
         CD3DX12_ROOT_SIGNATURE_DESC desc(
-            2,
+            4,
             params,
-            0,
-            nullptr,
+            1,
+            &linearWrap,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         ComPtr<ID3DBlob> serialized;
@@ -219,6 +237,9 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
     auto psParticle = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "PS_Particle", "ps_5_0");
     auto csParticleUpdate = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "CS_UpdateParticles", "cs_5_0");
     auto vsShadow = d3dUtil::CompileShader(L"shader/shadow.hlsl", nullptr, "VS_Shadow", "vs_5_0");
+    auto vsShadowCp = d3dUtil::CompileShader(L"shader/shadow_tess.hlsl", nullptr, "VS_ControlPoint", "vs_5_0");
+    auto hsShadow = d3dUtil::CompileShader(L"shader/shadow_tess.hlsl", nullptr, "HS_Main", "hs_5_0");
+    auto dsShadow = d3dUtil::CompileShader(L"shader/shadow_tess.hlsl", nullptr, "DS_Shadow", "ds_5_0");
 
     std::array<D3D12_INPUT_ELEMENT_DESC, 5> inputLayout = {
         D3D12_INPUT_ELEMENT_DESC{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -356,4 +377,13 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
 
     ThrowIfFailed(device->CreateGraphicsPipelineState(&shadowDesc, IID_PPV_ARGS(&mShadowPSO)),
                   "Create shadow PSO failed");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowTessDesc = shadowDesc;
+    shadowTessDesc.VS = {vsShadowCp->GetBufferPointer(), vsShadowCp->GetBufferSize()};
+    shadowTessDesc.HS = {hsShadow->GetBufferPointer(), hsShadow->GetBufferSize()};
+    shadowTessDesc.DS = {dsShadow->GetBufferPointer(), dsShadow->GetBufferSize()};
+    shadowTessDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&shadowTessDesc, IID_PPV_ARGS(&mShadowTessellationPSO)),
+                  "Create shadow tessellation PSO failed");
 }
