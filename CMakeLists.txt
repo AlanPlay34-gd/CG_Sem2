@@ -39,6 +39,7 @@ set(HEADER_FILES
 set(SHADER_FILES
     shader/main_shader.hlsl
     shader/lighting.hlsl
+    shader/post_process.hlsl
     shader/particles.hlsl
     shader/shadow.hlsl
 )

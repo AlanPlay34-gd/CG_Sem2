@@ -475,6 +475,7 @@ DirectXApp::~DirectXApp() {
     mRenderingSystem.reset();
     mObjectCB.reset();
     mPassCB.reset();
+    mPostProcessCB.reset();
     mLightingCB.reset();
     mShadowPassCB.reset();
     mShadowCB.reset();
@@ -500,6 +501,7 @@ DirectXApp::~DirectXApp() {
     mVertexBufferGPU.Reset();
     mIndexBufferGPU.Reset();
     mDepthStencilBuffer.Reset();
+    mSceneColorBuffer.Reset();
     mShadowMap.Reset();
     for (auto& buffer : mSwapChainBuffer) {
         buffer.Reset();
@@ -655,7 +657,7 @@ void DirectXApp::CreateSwapChain() {
 
 void DirectXApp::CreateRtvAndDsvDescriptorHeaps() {
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-    rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
+    rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 1;
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(mDevice->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvHeap)), "Create RTV heap failed");
@@ -747,6 +749,47 @@ void DirectXApp::CreateDepthStencilBuffer() {
     mDevice->CreateDepthStencilView(mDepthStencilBuffer.Get(), nullptr, DepthStencilView());
 }
 
+void DirectXApp::BuildSceneColorResource() {
+    if (!mDevice || !mRtvHeap) {
+        return;
+    }
+
+    mSceneColorBuffer.Reset();
+
+    D3D12_RESOURCE_DESC colorDesc = {};
+    colorDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    colorDesc.Alignment = 0;
+    colorDesc.Width = mClientWidth;
+    colorDesc.Height = mClientHeight;
+    colorDesc.DepthOrArraySize = 1;
+    colorDesc.MipLevels = 1;
+    colorDesc.Format = SceneColorFormat;
+    colorDesc.SampleDesc.Count = 1;
+    colorDesc.SampleDesc.Quality = 0;
+    colorDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    colorDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_CLEAR_VALUE clear = {};
+    clear.Format = SceneColorFormat;
+    clear.Color[0] = 0.0f;
+    clear.Color[1] = 0.0f;
+    clear.Color[2] = 0.0f;
+    clear.Color[3] = 1.0f;
+
+    const CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+    ThrowIfFailed(mDevice->CreateCommittedResource(
+        &defaultHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &colorDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &clear,
+        IID_PPV_ARGS(&mSceneColorBuffer)),
+        "Create scene color buffer failed");
+
+    mDevice->CreateRenderTargetView(mSceneColorBuffer.Get(), nullptr, SceneColorRtv());
+    mSceneColorState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+}
+
 void DirectXApp::OnResize(unsigned int width, unsigned int height) {
     if (!mDevice || !mSwapChain) {
         return;
@@ -774,6 +817,7 @@ void DirectXApp::OnResize(unsigned int width, unsigned int height) {
 
     CreateRenderTargetViews();
     CreateDepthStencilBuffer();
+    BuildSceneColorResource();
 
     if (mRenderingSystem) {
         mRenderingSystem->OnResize(mDevice.Get(), mClientWidth, mClientHeight);
@@ -807,6 +851,7 @@ void DirectXApp::BuildScene() {
 
     BuildConstantBuffers();
     BuildShadowResources();
+    BuildSceneColorResource();
     InitializeParticleResources();
     BuildMainSrvHeap();
     BindSubmeshTextures();
@@ -1086,6 +1131,43 @@ void DirectXApp::BuildScenePresets() {
         lab6ShadowsScene.objects.push_back(earthLeft);
     }
     mScenePresets.push_back(lab6ShadowsScene);
+
+    ScenePreset lab7PostScene;
+    lab7PostScene.name = L"Scene 6: Lab 7 Post Processing";
+    lab7PostScene.cameraPos = XMFLOAT3(0.0f, 5.1f, -13.8f);
+    lab7PostScene.cameraYaw = 0.0f;
+    lab7PostScene.cameraPitch = -0.30f;
+    {
+        if (hasGround) {
+            SceneObject ground;
+            ground.modelAssetIndex = groundModel;
+            ground.position = XMFLOAT3(0.0f, 0.0f, 0.0f);
+            ground.scale = XMFLOAT3(1.0f, 1.0f, 1.0f);
+            lab7PostScene.objects.push_back(ground);
+        }
+
+        SceneObject earthMain;
+        earthMain.modelAssetIndex = earthModel;
+        earthMain.position = XMFLOAT3(0.0f, 1.55f, 1.2f);
+        earthMain.scale = XMFLOAT3(0.62f, 0.62f, 0.62f);
+        earthMain.rotationY = 0.15f;
+        lab7PostScene.objects.push_back(earthMain);
+
+        SceneObject earthLeft;
+        earthLeft.modelAssetIndex = earthModel;
+        earthLeft.position = XMFLOAT3(-1.25f, 1.05f, -0.15f);
+        earthLeft.scale = XMFLOAT3(0.42f, 0.42f, 0.42f);
+        earthLeft.rotationY = 0.72f;
+        lab7PostScene.objects.push_back(earthLeft);
+
+        SceneObject earthRight;
+        earthRight.modelAssetIndex = earthModel;
+        earthRight.position = XMFLOAT3(1.25f, 0.95f, -0.45f);
+        earthRight.scale = XMFLOAT3(0.35f, 0.35f, 0.35f);
+        earthRight.rotationY = 1.10f;
+        lab7PostScene.objects.push_back(earthRight);
+    }
+    mScenePresets.push_back(lab7PostScene);
 }
 
 void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources) {
@@ -1133,10 +1215,10 @@ void DirectXApp::ActivateScene(unsigned int sceneIndex, bool rebuildGpuResources
         // Scene 2: animate two nearby planets.
         addTrack(earthIndices[0], 2.0f, 2.2f, 0.0f);
         addTrack(earthIndices[1], 2.0f, 2.2f, 1.15f);
-    } else if (mActiveSceneIndex == 4u && earthIndices.size() >= 2u) {
-        // Scene 5 (Lab 6): animate only one planet to keep shadow test readable.
+    } else if ((mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) && earthIndices.size() >= 2u) {
+        // Lab 6/7 scenes: animate only one planet to keep visual tests readable.
         addTrack(earthIndices[1], 1.1f, 1.45f, 0.0f);
-    } else if (mActiveSceneIndex != 3u && mActiveSceneIndex != 4u && !earthIndices.empty()) {
+    } else if (mActiveSceneIndex != 3u && mActiveSceneIndex != 4u && mActiveSceneIndex != 5u && !earthIndices.empty()) {
         addTrack(earthIndices[0], (mActiveSceneIndex == 2u) ? 3.0f : 2.0f, 2.2f, 0.0f);
     }
 
@@ -1418,13 +1500,17 @@ void DirectXApp::UpdateWindowTitle() {
         ws << L" | OctNodes " << mLastOctreeNodesVisited;
     }
 
-    ws << L" | Scene: [1-5]";
+    ws << L" | Scene: [1-6]";
     ws << L" | Lab4 Debug: C/O";
     if (mActiveSceneIndex == 3u) {
         ws << L" | Lab5: Particles";
     } else if (mActiveSceneIndex == 4u) {
         ws << L" | Lab6: CSM+PCF";
+    } else if (mActiveSceneIndex == 5u) {
+        ws << L" | Lab7: Post FX";
     }
+    ws << L" | X Chromatic " << (mEnableChromaticAberration ? L"ON" : L"OFF");
+    ws << L" | M Sobel " << (mEnableSobelEdges ? L"ON" : L"OFF");
     SetWindowTextW(mHwnd, ws.str().c_str());
 }
 
@@ -1586,6 +1672,7 @@ void DirectXApp::BuildConstantBuffers() {
     mObjectCbvCount = (std::max)(1u, static_cast<unsigned int>(mSceneObjects.size()));
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(mDevice.Get(), mObjectCbvCount, true);
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(mDevice.Get(), 1, true);
+    mPostProcessCB = std::make_unique<UploadBuffer<PostProcessConstants>>(mDevice.Get(), 1, true);
     mLightingCB = std::make_unique<UploadBuffer<LightingConstants>>(mDevice.Get(), LightingCbElementCount, true);
     mShadowPassCB = std::make_unique<UploadBuffer<ShadowPassConstants>>(mDevice.Get(), ShadowCascadeCount, true);
     mShadowCB = std::make_unique<UploadBuffer<ShadowConstants>>(mDevice.Get(), 1, true);
@@ -1651,11 +1738,12 @@ void DirectXApp::BuildMainSrvHeap() {
     mGBufferSrvStart = mTextureSrvStart + textureCount;
     mShadowSrvIndex = mGBufferSrvStart + GBuffer::Count;
     mShadowOverlaySrvIndex = mShadowSrvIndex + 1;
-    mParticleSrvStart = mShadowOverlaySrvIndex + 1;
+    mSceneColorSrvIndex = mShadowOverlaySrvIndex + 1;
+    mParticleSrvStart = mSceneColorSrvIndex + 1;
     mParticleUavStart = mParticleSrvStart + ParticleBufferCount;
 
     const unsigned int descriptorCount =
-        mObjectCbvCount + 2 + textureCount + GBuffer::Count + 2 + ParticleBufferCount + ParticleBufferCount;
+        mObjectCbvCount + 2 + textureCount + GBuffer::Count + 3 + ParticleBufferCount + ParticleBufferCount;
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
     heapDesc.NumDescriptors = descriptorCount;
@@ -1773,6 +1861,23 @@ void DirectXApp::BuildMainSrvHeap() {
         mDevice->CreateShaderResourceView(overlayTex.resource.Get(), &overlaySrvDesc, overlaySrvCpu);
     }
 
+    if (mSceneColorBuffer) {
+        CD3DX12_CPU_DESCRIPTOR_HANDLE sceneColorSrvCpu(
+            mCbvSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+            static_cast<INT>(mSceneColorSrvIndex),
+            mCbvSrvUavDescriptorSize);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC sceneColorSrvDesc = {};
+        sceneColorSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sceneColorSrvDesc.Format = SceneColorFormat;
+        sceneColorSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sceneColorSrvDesc.Texture2D.MostDetailedMip = 0;
+        sceneColorSrvDesc.Texture2D.MipLevels = 1;
+        sceneColorSrvDesc.Texture2D.PlaneSlice = 0;
+        sceneColorSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+        mDevice->CreateShaderResourceView(mSceneColorBuffer.Get(), &sceneColorSrvDesc, sceneColorSrvCpu);
+    }
+
     for (unsigned int i = 0; i < ParticleBufferCount; ++i) {
         if (!mParticleBuffers[i]) {
             continue;
@@ -1844,7 +1949,7 @@ void DirectXApp::BuildLights() {
 
     LightData dir;
     dir.Type = static_cast<unsigned int>(LightType::Directional);
-    if (mActiveSceneIndex == 4u) {
+    if (mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) {
         dir.Direction = XMFLOAT3(-0.22f, -1.0f, 0.18f);
         dir.Color = XMFLOAT3(1.0f, 0.97f, 0.92f);
         dir.Intensity = 1.38f;
@@ -1866,7 +1971,7 @@ void DirectXApp::BuildLights() {
         mLights.push_back(point);
     };
 
-    if (mActiveSceneIndex == 4u) {
+    if (mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) {
         // Small fill, so directional shadow contrast remains visible on the plane.
         addPoint(XMFLOAT3(0.0f, 4.4f, -0.8f), XMFLOAT3(1.0f, 0.93f, 0.80f), 0.55f, 14.0f);
     } else {
@@ -1887,7 +1992,7 @@ void DirectXApp::BuildLights() {
         mLights.push_back(spot);
     };
 
-    if (mActiveSceneIndex != 4u) {
+    if (mActiveSceneIndex != 4u && mActiveSceneIndex != 5u) {
         addSpot(XMFLOAT3(13.0f, 9.0f, 0.0f), XMFLOAT3(-1.0f, -0.75f, 0.0f), XMFLOAT3(1.0f, 0.9f, 0.5f), 2.2f, 34.0f, 0.35f);
         addSpot(XMFLOAT3(-13.0f, 8.0f, 3.0f), XMFLOAT3(1.0f, -0.85f, -0.15f), XMFLOAT3(0.4f, 1.0f, 0.9f), 2.0f, 30.0f, 0.32f);
     }
@@ -2233,7 +2338,7 @@ void DirectXApp::UpdateShadowCascades(const XMMATRIX& view) {
     lightDir = XMVector3Normalize(lightDir);
 
     const float nearZ = 0.1f;
-    const float sceneShadowMaxDistance = (mActiveSceneIndex == 4u) ? 90.0f : mShadowMaxDistance;
+    const float sceneShadowMaxDistance = (mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) ? 90.0f : mShadowMaxDistance;
     const float farZ = (std::max)(nearZ + 1.0f, sceneShadowMaxDistance);
     const float fovY = 0.25 * XM_PI;
     const float aspect = static_cast<float>(mClientWidth) / static_cast<float>((std::max)(1u, mClientHeight));
@@ -2358,7 +2463,7 @@ void DirectXApp::UpdateShadowCascades(const XMMATRIX& view) {
     }
     shadow.CascadeSplits = XMFLOAT4(mShadowSplitDepths[0], mShadowSplitDepths[1], mShadowSplitDepths[2], mShadowSplitDepths[3]);
     shadow.LightDirection = lightDirNorm;
-    if (mActiveSceneIndex == 4u) {
+    if (mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) {
         shadow.ShadowStrength = 0.92f;
         shadow.DepthBias = 0.00078f;
         shadow.NormalBias = 0.0024f;
@@ -2576,11 +2681,14 @@ void DirectXApp::Update(const GameTimer& gt) {
     const bool gDown = (GetAsyncKeyState('G') & 0x8000) != 0;
     const bool cDown = (GetAsyncKeyState('C') & 0x8000) != 0;
     const bool oDown = (GetAsyncKeyState('O') & 0x8000) != 0;
+    const bool xDown = (GetAsyncKeyState('X') & 0x8000) != 0;
+    const bool mDown = (GetAsyncKeyState('M') & 0x8000) != 0;
     const bool digit1Down = (GetAsyncKeyState('1') & 0x8000) != 0;
     const bool digit2Down = (GetAsyncKeyState('2') & 0x8000) != 0;
     const bool digit3Down = (GetAsyncKeyState('3') & 0x8000) != 0;
     const bool digit4Down = (GetAsyncKeyState('4') & 0x8000) != 0;
     const bool digit5Down = (GetAsyncKeyState('5') & 0x8000) != 0;
+    const bool digit6Down = (GetAsyncKeyState('6') & 0x8000) != 0;
     bool titleDirty = false;
 
     if (f1Down && !mF1WasDown) {
@@ -2674,6 +2782,24 @@ void DirectXApp::Update(const GameTimer& gt) {
     }
     mDigit5WasDown = digit5Down;
 
+    if (digit6Down && !mDigit6WasDown) {
+        ActivateScene(5, true);
+        titleDirty = true;
+    }
+    mDigit6WasDown = digit6Down;
+
+    if (xDown && !mXWasDown) {
+        mEnableChromaticAberration = !mEnableChromaticAberration;
+        titleDirty = true;
+    }
+    mXWasDown = xDown;
+
+    if (mDown && !mMWasDown) {
+        mEnableSobelEdges = !mEnableSobelEdges;
+        titleDirty = true;
+    }
+    mMWasDown = mDown;
+
     auto clampTiling = [](float v) {
         return std::clamp(v, 0.10f, 16.0f);
     };
@@ -2765,7 +2891,7 @@ void DirectXApp::Update(const GameTimer& gt) {
         const float objectScale = (std::max)(object.scale.x, (std::max)(object.scale.y, object.scale.z));
         obj.Padding.y = std::clamp(0.06f * objectScale, 0.008f, 0.06f);
         float normalScale = 1.0f;
-        if (mActiveSceneIndex == 4u) {
+        if (mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) {
             const std::string modelName = ToLowerAscii(mModelAssets[object.modelAssetIndex].name);
             if (modelName == "earth") {
                 normalScale = 0.72f;
@@ -2790,12 +2916,23 @@ void DirectXApp::Update(const GameTimer& gt) {
     XMMATRIX invViewProj = XMMatrixInverse(nullptr, view * proj);
     XMStoreFloat4x4(&pass.InvViewProj, XMMatrixTranspose(invViewProj));
     pass.EyePosW = mEyePos;
-    if (mActiveSceneIndex == 4u) {
+    if (mActiveSceneIndex == 4u || mActiveSceneIndex == 5u) {
         pass.AmbientColor = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
     } else {
         pass.AmbientColor = XMFLOAT4(0.08f, 0.08f, 0.1f, 1.0f);
     }
     mPassCB->CopyData(0, pass);
+
+    PostProcessConstants post = {};
+    post.Gamma = 2.2f;
+    post.Exposure = 1.08f;
+    post.EnableChromaticAberration = mEnableChromaticAberration ? 1.0f : 0.0f;
+    post.EnableSobelEdges = mEnableSobelEdges ? 1.0f : 0.0f;
+    post.ScreenSize = XMFLOAT2(static_cast<float>(mClientWidth), static_cast<float>(mClientHeight));
+    post.ChromaticStrength = 9.0f;
+    post.EdgeStrength = 0.72f;
+    post.EdgeThreshold = 0.12f;
+    mPostProcessCB->CopyData(0, post);
 
     UpdateShadowCascades(view);
 
@@ -2934,16 +3071,19 @@ void DirectXApp::Draw(const GameTimer&) {
     }
     mCommandList->ResourceBarrier(static_cast<UINT>(toSrv.size()), toSrv.data());
 
-    auto bbToRt = CD3DX12_RESOURCE_BARRIER::Transition(
-        CurrentBackBuffer(),
-        D3D12_RESOURCE_STATE_PRESENT,
-        D3D12_RESOURCE_STATE_RENDER_TARGET);
-    mCommandList->ResourceBarrier(1, &bbToRt);
-
     const float clearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
-    auto rtv = CurrentBackBufferView();
-    mCommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-    mCommandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+    if (mSceneColorState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+        auto sceneToRt = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneColorBuffer.Get(),
+            mSceneColorState,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+        mCommandList->ResourceBarrier(1, &sceneToRt);
+        mSceneColorState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    }
+
+    auto sceneRtv = SceneColorRtv();
+    mCommandList->ClearRenderTargetView(sceneRtv, clearColor, 0, nullptr);
+    mCommandList->OMSetRenderTargets(1, &sceneRtv, TRUE, nullptr);
 
     mCommandList->SetPipelineState(mRenderingSystem->GetLightingPSO());
     mCommandList->SetGraphicsRootSignature(mRenderingSystem->GetLightingRootSignature());
@@ -2999,7 +3139,33 @@ void DirectXApp::Draw(const GameTimer&) {
         ++lightCbIndex;
     }
 
-    DrawParticles(mCommandList.Get(), view, proj, rtv, dsv);
+    DrawParticles(mCommandList.Get(), view, proj, sceneRtv, dsv);
+
+    if (mSceneColorState != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) {
+        auto sceneToSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+            mSceneColorBuffer.Get(),
+            mSceneColorState,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        mCommandList->ResourceBarrier(1, &sceneToSrv);
+        mSceneColorState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+
+    auto bbToRt = CD3DX12_RESOURCE_BARRIER::Transition(
+        CurrentBackBuffer(),
+        D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    mCommandList->ResourceBarrier(1, &bbToRt);
+
+    auto rtv = CurrentBackBufferView();
+    mCommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    mCommandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+
+    mCommandList->SetPipelineState(mRenderingSystem->GetPostProcessPSO());
+    mCommandList->SetGraphicsRootSignature(mRenderingSystem->GetPostProcessRootSignature());
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mCommandList->SetGraphicsRootConstantBufferView(0, mPostProcessCB->Resource()->GetGPUVirtualAddress());
+    mCommandList->SetGraphicsRootDescriptorTable(1, GetGpuSrvHandle(mSceneColorSrvIndex));
+    mCommandList->DrawInstanced(3, 1, 0, 0);
 
     auto bbToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         CurrentBackBuffer(),
@@ -3072,6 +3238,13 @@ D3D12_CPU_DESCRIPTOR_HANDLE DirectXApp::CurrentBackBufferView() const {
     return CD3DX12_CPU_DESCRIPTOR_HANDLE(
         mRtvHeap->GetCPUDescriptorHandleForHeapStart(),
         static_cast<INT>(mCurrBackBuffer),
+        mRtvDescriptorSize);
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE DirectXApp::SceneColorRtv() const {
+    return CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        mRtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        static_cast<INT>(SwapChainBufferCount),
         mRtvDescriptorSize);
 }
 

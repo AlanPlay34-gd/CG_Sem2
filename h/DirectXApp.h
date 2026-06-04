@@ -37,6 +37,20 @@ struct PassConstants {
     XMFLOAT4 AmbientColor = {0.0f, 0.0f, 0.0f, 1.0f};
 };
 
+struct PostProcessConstants {
+    float Gamma = 2.2f;
+    float Exposure = 1.0f;
+    float EnableChromaticAberration = 0.0f;
+    float EnableSobelEdges = 0.0f;
+
+    XMFLOAT2 ScreenSize = {1280.0f, 720.0f};
+    float ChromaticStrength = 2.4f;
+    float EdgeStrength = 0.65f;
+
+    float EdgeThreshold = 0.14f;
+    XMFLOAT3 Padding = {0.0f, 0.0f, 0.0f};
+};
+
 struct ShadowPassConstants {
     XMFLOAT4X4 LightViewProj = {};
 };
@@ -123,6 +137,7 @@ private:
     void CreateRtvAndDsvDescriptorHeaps();
     void CreateRenderTargetViews();
     void CreateDepthStencilBuffer();
+    void BuildSceneColorResource();
 
     void BuildScene();
     void LoadModels();
@@ -161,6 +176,7 @@ private:
     void FlushCommandQueue();
 
     D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView() const;
+    D3D12_CPU_DESCRIPTOR_HANDLE SceneColorRtv() const;
     D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const;
     D3D12_CPU_DESCRIPTOR_HANDLE ShadowCascadeDsv(unsigned int cascadeIndex) const;
     ID3D12Resource* CurrentBackBuffer() const;
@@ -237,6 +253,7 @@ private:
     static constexpr unsigned int LightingCbElementCount = 2048;
     static constexpr unsigned int ShadowCascadeCount = 4;
     static constexpr unsigned int ShadowMapSize = 2048;
+    static constexpr DXGI_FORMAT SceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
     HWND mHwnd = nullptr;
     unsigned int mClientWidth = 1280;
@@ -256,6 +273,8 @@ private:
 
     std::array<ComPtr<ID3D12Resource>, SwapChainBufferCount> mSwapChainBuffer;
     ComPtr<ID3D12Resource> mDepthStencilBuffer;
+    ComPtr<ID3D12Resource> mSceneColorBuffer;
+    D3D12_RESOURCE_STATES mSceneColorState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
     ComPtr<ID3D12DescriptorHeap> mRtvHeap;
     ComPtr<ID3D12DescriptorHeap> mDsvHeap;
@@ -299,11 +318,13 @@ private:
     unsigned int mGBufferSrvStart = 0;
     unsigned int mShadowSrvIndex = 0;
     unsigned int mShadowOverlaySrvIndex = 0;
+    unsigned int mSceneColorSrvIndex = 0;
     unsigned int mParticleSrvStart = 0;
     unsigned int mParticleUavStart = 0;
 
     std::unique_ptr<UploadBuffer<ObjectConstants>> mObjectCB;
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB;
+    std::unique_ptr<UploadBuffer<PostProcessConstants>> mPostProcessCB;
     std::unique_ptr<UploadBuffer<LightingConstants>> mLightingCB;
     std::unique_ptr<UploadBuffer<ShadowPassConstants>> mShadowPassCB;
     std::unique_ptr<UploadBuffer<ShadowConstants>> mShadowCB;
@@ -361,6 +382,11 @@ private:
     bool mDigit3WasDown = false;
     bool mDigit4WasDown = false;
     bool mDigit5WasDown = false;
+    bool mDigit6WasDown = false;
+    bool mXWasDown = false;
+    bool mMWasDown = false;
+    bool mEnableChromaticAberration = false;
+    bool mEnableSobelEdges = false;
 
     unsigned int mActiveSceneIndex = 0;
     unsigned int mLastVisibleCount = 0;

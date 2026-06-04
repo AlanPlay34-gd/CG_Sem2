@@ -7,6 +7,10 @@
 
 using Microsoft::WRL::ComPtr;
 
+namespace {
+constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+
 bool RenderingSystem::Initialize(ID3D12Device* device,
                                  unsigned int width,
                                  unsigned int height,
@@ -182,6 +186,45 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
     }
 
     {
+        CD3DX12_DESCRIPTOR_RANGE inputRange;
+        inputRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // t0: rendered scene color
+
+        CD3DX12_ROOT_PARAMETER params[2];
+        params[0].InitAsConstantBufferView(0); // b0 post-process constants
+        params[1].InitAsDescriptorTable(1, &inputRange, D3D12_SHADER_VISIBILITY_PIXEL);
+
+        CD3DX12_STATIC_SAMPLER_DESC linearClamp(
+            0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+
+        CD3DX12_ROOT_SIGNATURE_DESC desc(
+            2,
+            params,
+            1,
+            &linearClamp,
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+        ComPtr<ID3DBlob> serialized;
+        ComPtr<ID3DBlob> errors;
+        ThrowIfFailed(D3D12SerializeRootSignature(
+            &desc,
+            D3D_ROOT_SIGNATURE_VERSION_1,
+            &serialized,
+            &errors),
+            "Serialize post-process root signature failed");
+
+        ThrowIfFailed(device->CreateRootSignature(
+            0,
+            serialized->GetBufferPointer(),
+            serialized->GetBufferSize(),
+            IID_PPV_ARGS(&mPostProcessRootSignature)),
+            "Create post-process root signature failed");
+    }
+
+    {
         CD3DX12_DESCRIPTOR_RANGE shadowSrvRange;
         shadowSrvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // t0 displacement
 
@@ -232,6 +275,8 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
 
     auto vsLighting = d3dUtil::CompileShader(L"shader/lighting.hlsl", nullptr, "VS_Fullscreen", "vs_5_0");
     auto psLighting = d3dUtil::CompileShader(L"shader/lighting.hlsl", nullptr, "PS_Lighting", "ps_5_0");
+    auto vsPostProcess = d3dUtil::CompileShader(L"shader/post_process.hlsl", nullptr, "VS_Fullscreen", "vs_5_0");
+    auto psPostProcess = d3dUtil::CompileShader(L"shader/post_process.hlsl", nullptr, "PS_PostProcess", "ps_5_0");
     auto vsParticle = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "VS_Particle", "vs_5_0");
     auto gsParticle = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "GS_Particle", "gs_5_0");
     auto psParticle = d3dUtil::CompileShader(L"shader/particles.hlsl", nullptr, "PS_Particle", "ps_5_0");
@@ -316,12 +361,22 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
     lightDesc.SampleMask = UINT_MAX;
     lightDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     lightDesc.NumRenderTargets = 1;
-    lightDesc.RTVFormats[0] = mBackBufferFormat;
+    lightDesc.RTVFormats[0] = kSceneColorFormat;
     lightDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
     lightDesc.SampleDesc.Count = 1;
 
     ThrowIfFailed(device->CreateGraphicsPipelineState(&lightDesc, IID_PPV_ARGS(&mLightingPSO)),
                   "Create lighting PSO failed");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC postDesc = lightDesc;
+    postDesc.pRootSignature = mPostProcessRootSignature.Get();
+    postDesc.VS = {vsPostProcess->GetBufferPointer(), vsPostProcess->GetBufferSize()};
+    postDesc.PS = {psPostProcess->GetBufferPointer(), psPostProcess->GetBufferSize()};
+    postDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    postDesc.RTVFormats[0] = mBackBufferFormat;
+
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&postDesc, IID_PPV_ARGS(&mPostProcessPSO)),
+                  "Create post-process PSO failed");
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC particleDesc = {};
     particleDesc.InputLayout = {nullptr, 0};
@@ -341,7 +396,7 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device) {
     particleDesc.SampleMask = UINT_MAX;
     particleDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
     particleDesc.NumRenderTargets = 1;
-    particleDesc.RTVFormats[0] = mBackBufferFormat;
+    particleDesc.RTVFormats[0] = kSceneColorFormat;
     particleDesc.DSVFormat = mDepthStencilFormat;
     particleDesc.SampleDesc.Count = 1;
 
