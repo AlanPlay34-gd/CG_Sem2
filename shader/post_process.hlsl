@@ -1,4 +1,7 @@
 Texture2D gSceneColor : register(t0);
+Texture2D gAlbedoTex : register(t1);
+Texture2D gNormalTex : register(t2);
+Texture2D gDepthTex : register(t3);
 SamplerState gLinearClamp : register(s0);
 
 cbuffer PostProcessConstants : register(b0)
@@ -13,7 +16,9 @@ cbuffer PostProcessConstants : register(b0)
     float gEdgeStrength;
 
     float gEdgeThreshold;
-    float3 gPadding;
+    float gDepthEdgeStrength;
+    float gDepthEdgeThreshold;
+    float gPadding;
 };
 
 struct VSOut
@@ -80,6 +85,25 @@ float SobelEdge(float2 uv)
     return smoothstep(gEdgeThreshold, gEdgeThreshold + 0.12f, edge);
 }
 
+float SobelDepthEdge(float2 uv)
+{
+    float2 texel = 1.0f / max(gScreenSize, float2(1.0f, 1.0f));
+
+    float tl = gDepthTex.Sample(gLinearClamp, uv + texel * float2(-1.0f, -1.0f)).r;
+    float tc = gDepthTex.Sample(gLinearClamp, uv + texel * float2( 0.0f, -1.0f)).r;
+    float tr = gDepthTex.Sample(gLinearClamp, uv + texel * float2( 1.0f, -1.0f)).r;
+    float ml = gDepthTex.Sample(gLinearClamp, uv + texel * float2(-1.0f,  0.0f)).r;
+    float mr = gDepthTex.Sample(gLinearClamp, uv + texel * float2( 1.0f,  0.0f)).r;
+    float bl = gDepthTex.Sample(gLinearClamp, uv + texel * float2(-1.0f,  1.0f)).r;
+    float bc = gDepthTex.Sample(gLinearClamp, uv + texel * float2( 0.0f,  1.0f)).r;
+    float br = gDepthTex.Sample(gLinearClamp, uv + texel * float2( 1.0f,  1.0f)).r;
+
+    float gx = -tl - 2.0f * ml - bl + tr + 2.0f * mr + br;
+    float gy = -tl - 2.0f * tc - tr + bl + 2.0f * bc + br;
+    float edge = length(float2(gx, gy));
+    return smoothstep(gDepthEdgeThreshold, gDepthEdgeThreshold * 4.0f, edge);
+}
+
 float4 PS_PostProcess(VSOut pin) : SV_Target
 {
     float2 uv = pin.TexC;
@@ -88,7 +112,9 @@ float4 PS_PostProcess(VSOut pin) : SV_Target
 
     if (gEnableSobelEdges > 0.5f)
     {
-        float edge = SobelEdge(uv);
+        float colorEdge = SobelEdge(uv);
+        float depthEdge = SobelDepthEdge(uv) * gDepthEdgeStrength;
+        float edge = max(colorEdge, depthEdge);
         float3 ink = float3(0.02f, 0.025f, 0.03f);
         color = lerp(color, ink, edge * gEdgeStrength);
     }

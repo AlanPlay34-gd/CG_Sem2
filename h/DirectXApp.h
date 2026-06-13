@@ -48,7 +48,9 @@ struct PostProcessConstants {
     float EdgeStrength = 0.65f;
 
     float EdgeThreshold = 0.14f;
-    XMFLOAT3 Padding = {0.0f, 0.0f, 0.0f};
+    float DepthEdgeStrength = 1.0f;
+    float DepthEdgeThreshold = 0.002f;
+    float Padding = 0.0f;
 };
 
 struct ShadowPassConstants {

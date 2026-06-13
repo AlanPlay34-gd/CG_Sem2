@@ -2932,6 +2932,8 @@ void DirectXApp::Update(const GameTimer& gt) {
     post.ChromaticStrength = 9.0f;
     post.EdgeStrength = 0.72f;
     post.EdgeThreshold = 0.12f;
+    post.DepthEdgeStrength = 1.0f;
+    post.DepthEdgeThreshold = 0.002f;
     mPostProcessCB->CopyData(0, post);
 
     UpdateShadowCascades(view);
@@ -3165,6 +3167,7 @@ void DirectXApp::Draw(const GameTimer&) {
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     mCommandList->SetGraphicsRootConstantBufferView(0, mPostProcessCB->Resource()->GetGPUVirtualAddress());
     mCommandList->SetGraphicsRootDescriptorTable(1, GetGpuSrvHandle(mSceneColorSrvIndex));
+    mCommandList->SetGraphicsRootDescriptorTable(2, GetGpuSrvHandle(mGBufferSrvStart));
     mCommandList->DrawInstanced(3, 1, 0, 0);
 
     auto bbToPresent = CD3DX12_RESOURCE_BARRIER::Transition(

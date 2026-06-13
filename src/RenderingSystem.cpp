@@ -186,12 +186,16 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
     }
 
     {
-        CD3DX12_DESCRIPTOR_RANGE inputRange;
-        inputRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // t0: rendered scene color
+        CD3DX12_DESCRIPTOR_RANGE sceneColorRange;
+        sceneColorRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0); // t0: rendered scene color
 
-        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_DESCRIPTOR_RANGE gbufferRange;
+        gbufferRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, GBuffer::Count, 1); // t1..t3: albedo, normal, depth
+
+        CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0); // b0 post-process constants
-        params[1].InitAsDescriptorTable(1, &inputRange, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[1].InitAsDescriptorTable(1, &sceneColorRange, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[2].InitAsDescriptorTable(1, &gbufferRange, D3D12_SHADER_VISIBILITY_PIXEL);
 
         CD3DX12_STATIC_SAMPLER_DESC linearClamp(
             0,
@@ -201,7 +205,7 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device) {
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
 
         CD3DX12_ROOT_SIGNATURE_DESC desc(
-            2,
+            3,
             params,
             1,
             &linearClamp,
